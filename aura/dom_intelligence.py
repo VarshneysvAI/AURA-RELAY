@@ -348,6 +348,29 @@ class DomIntelligence:
             # If highlighting fails, continue without it
             print(f"Highlight failed: {e}")
             return False
+
+    async def click_best_candidate(self, selectors: List[str], max_retries: int = 3) -> bool:
+        """
+        Try multiple selectors in order of preference until one succeeds.
+        Uses safe_click for each attempt to get retry logic and Iron Man vision.
+        """
+        for selector in selectors:
+            # Extract text from selector for safe_click
+            # Handles formats like "text=Download Tax Document", "button:has-text('Sign in')"
+            import re
+            match = re.search(r"text[=:](['\"]?)([^'\"]+)\1", selector)
+            if match:
+                target_text = match.group(2)
+            elif selector.startswith('"') or selector.startswith("'"):
+                target_text = selector.strip("\"'")
+            else:
+                target_text = selector
+            
+            # Try safe_click with the extracted text
+            if await self.safe_click(target_text, "button", max_retries=max_retries):
+                return True
+                
+        return False
     
     async def get_page_hash(self) -> str:
         """Get a hash representing current page state for circuit breaker."""
