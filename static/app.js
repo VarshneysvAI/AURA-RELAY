@@ -1335,6 +1335,7 @@ async function loadSettingsStatus() {
         // Status badges
         const bAnakin = document.getElementById('badgeAnakin');
         const bLlm = document.getElementById('badgeLlm');
+        const bGroq = document.getElementById('badgeGroq');
         const bTts = document.getElementById('badgeTts');
 
         if (bAnakin) {
@@ -1345,12 +1346,22 @@ async function loadSettingsStatus() {
             bLlm.innerText = cfg.nvidia_llm_configured ? 'Configured' : 'Missing';
             bLlm.className = `badge-status ${cfg.nvidia_llm_configured ? 'active' : ''}`;
         }
+        if (bGroq) {
+            bGroq.innerText = cfg.groq_configured ? 'Configured' : 'Missing';
+            bGroq.className = `badge-status ${cfg.groq_configured ? 'active' : ''}`;
+        }
         if (bTts) {
             bTts.innerText = cfg.nvidia_tts_configured ? 'Configured' : 'Missing';
             bTts.className = `badge-status ${cfg.nvidia_tts_configured ? 'active' : ''}`;
         }
 
         // Form fields
+        const llmModel = document.getElementById('cfgLlmModel');
+        if (llmModel && cfg.nvidia_llm_model) llmModel.value = cfg.nvidia_llm_model;
+
+        const groqModel = document.getElementById('cfgGroqModel');
+        if (groqModel && cfg.groq_model) groqModel.value = cfg.groq_model;
+
         const emailProv = document.getElementById('cfgEmailProvider');
         if (emailProv) emailProv.value = cfg.email_provider || 'local';
         toggleImapFields();
@@ -1387,6 +1398,12 @@ async function saveSettings(e) {
 
     const llmModel = document.getElementById('cfgLlmModel').value.trim();
     if (llmModel) payload.nvidia_llm_model = llmModel;
+
+    const groqKey = document.getElementById('cfgGroqKey').value.trim();
+    if (groqKey) payload.groq_api_key = groqKey;
+
+    const groqModel = document.getElementById('cfgGroqModel').value.trim();
+    if (groqModel) payload.groq_model = groqModel;
 
     const ttsKey = document.getElementById('cfgTtsKey').value.trim();
     if (ttsKey) payload.nvidia_tts_api_key = ttsKey;

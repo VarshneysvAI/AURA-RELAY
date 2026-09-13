@@ -412,30 +412,8 @@ class AgentExecutor:
                 await asyncio.sleep(0.3)
 
             elif action_type == "ask_user":
-                prev_ans = str(gathered_info.get("last_user_answer", "")).strip()
-                questions_count = gathered_info.get("questions_asked_count", 0)
-                current_listings = gathered_info.get("listings", [])
-
-                # Anti-repetition guard: if user already gave guidance, DO NOT ask again!
-                if prev_ans and questions_count >= 1 and not any(k in prev_ans.lower() for k in ["specific", "researcher", "who"]):
-                    self.state.add_event("agent_thought", f"Guidance already provided ('{prev_ans}'). Auto-selecting top option.")
-                    if current_listings:
-                        target_item = current_listings[0]
-                        if target_item.get("url"):
-                            await self.browser.navigate(target_item["url"])
-                            self.state.add_event("action_succeeded", f"Opened top option: {target_item.get('title', '')[:50]}")
-                            await self._capture_and_record_screenshot(f"step_{iteration}_autoselect.png", "Auto-selected top option")
-                            await asyncio.sleep(0.4)
-                            continue
-
-                gathered_info["questions_asked_count"] = questions_count + 1
                 question_text = value or f"I need clarification: {reasoning}"
-
-                # If options/videos/products are present on the page, proactively present top options in the question!
-                if current_listings and not any(str(i) in question_text for i in [1, 2]):
-                    opts_str = " | ".join([f"{i+1}. {item['title'][:40]}" for i, item in enumerate(current_listings[:3])])
-                    question_text = f"{question_text} (Top options: {opts_str})"
-
+                
                 audio_url = None
                 try:
                     from .tts_provider import get_tts_provider
@@ -443,48 +421,17 @@ class AgentExecutor:
                     audio_url, _ = await tts.synthesize(question_text)
                 except Exception:
                     pass
+                    
                 self._question_resolved.clear()
                 self.state.ask_question(question_text, audio_url=audio_url)
                 self.state.add_event("user_question", question_text)
                 await self._wait_for_resume()
+                
                 user_ans = self._get_last_user_answer()
                 action_history.append(f"user_answered: {user_ans}")
                 gathered_info["last_user_answer"] = user_ans
                 gathered_info[question_text] = user_ans
                 self.state.add_event("action_succeeded", f"Received user response: '{user_ans}'")
-
-                user_ans_lower = (user_ans or "").lower().strip()
-                
-                # If user asked for a specific researcher without naming who:
-                if any(w in user_ans_lower for w in ["specific researcher", "a researcher", "info about researcher"]) and not any(name in user_ans_lower for name in ["ng", "andrew", "hinton", "lecun", "bengio", "turing", "demis", "hassabis"]):
-                    clarify_q = "Which AI researcher would you like information about? For example: 1. Andrew Ng, 2. Geoffrey Hinton, 3. Yann LeCun, 4. Demis Hassabis."
-                    self._question_resolved.clear()
-                    self.state.ask_question(clarify_q)
-                    self.state.add_event("user_question", clarify_q)
-                    await self._wait_for_resume()
-                    user_ans = self._get_last_user_answer()
-                    user_ans_lower = (user_ans or "").lower().strip()
-                    gathered_info["last_user_answer"] = user_ans
-
-                # If user provided an answer/name and options exist:
-                if current_listings and any(w in user_ans_lower for w in ["1", "first", "any", "play", "open", "watch", "yes", "top", "go ahead"]):
-                    target_item = current_listings[0]
-                    if target_item.get("url"):
-                        self.state.add_event("action_succeeded", f"Navigating to chosen option #1: {target_item.get('title', '')[:50]}")
-                        await self.browser.navigate(target_item["url"])
-                        await self._capture_and_record_screenshot(f"step_{iteration}_choice.png", "Opened chosen option #1")
-                        await asyncio.sleep(0.4)
-                elif user_ans_lower and user_ans_lower not in ["ok", "yes", "any", "sure"]:
-                    # Clean user topic name and search directly
-                    clean_target = re.sub(r"(?i)\b(i want|info about|information on|about|search for|tell me about|researcher)\b", " ", user_ans).strip()
-                    if clean_target:
-                        curr_url = self.browser.page.url
-                        if "wikipedia.org" in curr_url or "wiki" in instruction.lower():
-                            wiki_url = f"https://en.wikipedia.org/w/index.php?search={urllib.parse.quote(clean_target)}"
-                            self.state.add_event("action_succeeded", f"Searching Wikipedia for: '{clean_target}'")
-                            await self.browser.navigate(wiki_url)
-                            await self._capture_and_record_screenshot(f"step_{iteration}_target_search.png", f"Search {clean_target}")
-                            await asyncio.sleep(0.4)
                 
             elif action_type == "navigate":
                 dest = value or "https://www.ebay.com"

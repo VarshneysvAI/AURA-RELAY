@@ -142,15 +142,68 @@ class NvidiaLLMProvider:
         self.api_key = api_key or cfg.nvidia_llm_api_key or os.getenv("NVIDIA_LLM_API_KEY")
         self.model = model or cfg.nvidia_llm_model or "openai/gpt-oss-20b"
         self.base_url = (base_url or cfg.nvidia_llm_base_url or "https://integrate.api.nvidia.com/v1").rstrip("/")
+        
+        self.groq_api_key = cfg.groq_api_key or os.getenv("GROQ_API_KEY")
+        self.groq_model = cfg.groq_model or "llama-3.3-70b-versatile"
+        
         # Rate limiter to respect NVIDIA free tier (up to 20 calls/sec)
         self.rate_limiter = RateLimiter(max_rate=20.0, time_window=1.0)
 
     def is_configured(self) -> bool:
-        return bool(self.api_key and self.api_key.startswith("nvapi-"))
+        return bool(self.api_key and self.api_key.startswith("nvapi-")) or bool(self.groq_api_key and self.groq_api_key.startswith("gsk_"))
+
+    async def _chat_groq(self, messages: List[Dict[str, str]], temperature: float, max_tokens: int) -> str:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.groq_api_key}",
+        }
+        payload = {
+            "model": self.groq_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=35.0) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = data["choices"][0]["message"]["content"]
+                        logger.info(f"Groq LLM success on attempt {attempt+1}")
+                        return clean_llm_response(content)
+                    elif resp.status_code == 429:
+                        retry_after = float(resp.headers.get("retry-after", 2.0))
+                        logger.warning(f"Groq LLM rate limit (429), backing off {retry_after}s on attempt {attempt+1}...")
+                        await asyncio.sleep(retry_after)
+                        continue
+                    elif resp.status_code in [502, 503, 504] and attempt < 1:
+                        logger.warning(f"Groq LLM {resp.status_code} on attempt {attempt+1}, retrying in 2s...")
+                        await asyncio.sleep(2.0)
+                        continue
+                    else:
+                        logger.warning(f"Groq LLM error {resp.status_code}: {resp.text[:150]}")
+                        return f"LLM error ({resp.status_code})"
+            except Exception as e:
+                logger.warning(f"Groq LLM exception: {e}")
+                if attempt < 1:
+                    await asyncio.sleep(1.0)
+                    continue
+                return f"LLM connection error: {str(e)}"
+        return "LLM unavailable"
 
     async def chat(self, messages: List[Dict[str, str]], temperature: float = 0.4, max_tokens: int = 500) -> str:
-        """Send chat messages with 20 calls/sec rate limiting and retry handling."""
+        """Send chat messages with 20 calls/sec rate limiting and retry handling. Fallback to Groq if NVIDIA fails."""
         if not self.is_configured():
+            return "NVIDIA LLM API key not configured. Operating in local heuristic mode."
+
+        if not self.api_key or not self.api_key.startswith("nvapi-"):
+            # Direct Groq fallback if NVIDIA key is not set
+            if self.groq_api_key:
+                logger.info("NVIDIA key missing, routing directly to Groq fallback.")
+                return await self._chat_groq(messages, temperature, max_tokens)
             return "NVIDIA LLM API key not configured. Operating in local heuristic mode."
 
         url = f"{self.base_url}/chat/completions"
@@ -163,8 +216,10 @@ class NvidiaLLMProvider:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "reasoning_effort": "low",
         }
 
+        nvidia_failed = False
         for attempt in range(3):
             try:
                 # Respect rate limit of 20 calls/sec
@@ -174,7 +229,10 @@ class NvidiaLLMProvider:
                     resp = await client.post(url, headers=headers, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
-                        content = data["choices"][0]["message"]["content"]
+                        msg_obj = data.get("choices", [{}])[0].get("message", {})
+                        content = msg_obj.get("content")
+                        if not content:
+                            content = msg_obj.get("reasoning_content") or msg_obj.get("reasoning") or ""
                         return clean_llm_response(content)
                     elif resp.status_code == 429:
                         retry_after = float(resp.headers.get("retry-after", 1.5))
@@ -187,17 +245,25 @@ class NvidiaLLMProvider:
                         continue
                     else:
                         logger.warning(f"NVIDIA LLM error {resp.status_code}: {resp.text[:150]}")
-                        return f"LLM error ({resp.status_code})"
+                        nvidia_failed = True
+                        break
             except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
                 if attempt < 2:
                     logger.warning(f"NVIDIA LLM timeout on attempt {attempt+1}, retrying...")
                     await asyncio.sleep(1.0)
                     continue
                 logger.warning(f"NVIDIA LLM timeout ({type(e).__name__}): {e}")
-                return f"LLM connection error: {str(e)}"
+                nvidia_failed = True
+                break
             except Exception as e:
                 logger.warning(f"NVIDIA LLM exception ({type(e).__name__}): {e}")
-                return f"LLM connection error: {str(e)}"
+                nvidia_failed = True
+                break
+                
+        if nvidia_failed and self.groq_api_key:
+            logger.warning("NVIDIA LLM failed, falling back to Groq API...")
+            return await self._chat_groq(messages, temperature, max_tokens)
+            
         return "LLM unavailable"
 
     async def optimize_search_query(
@@ -254,8 +320,13 @@ class NvidiaLLMProvider:
             raw = await self.chat(messages, temperature=0.1, max_tokens=350)
             parsed = extract_json_object(raw)
             if parsed and isinstance(parsed, dict) and parsed.get("optimized_query"):
-                opt_q = parsed["optimized_query"].strip()
-                plat = parsed.get("platform", heuristic["platform"])
+                opt_raw = parsed["optimized_query"].strip()
+                normalized = clean_search_query(opt_raw)
+                opt_q = normalized["keywords"] or opt_raw
+                plat = parsed.get("platform") or heuristic["platform"]
+                if any(w in (user_instruction + " " + opt_q).lower() for w in ["watch", "watches", "laptop", "phone", "keyboard", "buy", "shop", "price"]):
+                    if plat == "google":
+                        plat = "ebay"
                 max_p = parsed.get("max_price") or heuristic.get("max_price")
                 return {
                     "platform": plat,
@@ -264,7 +335,7 @@ class NvidiaLLMProvider:
                     "max_price": max_p,
                     "anakin_query": opt_q,
                     "target_url": build_search_url(plat, opt_q, max_p),
-                    "intent": parsed.get("intent", "general"),
+                    "intent": parsed.get("intent", "shopping" if plat in ["ebay", "amazon"] else "general"),
                 }
         except Exception as e:
             logger.warning(f"Error optimizing search query with LLM: {e}")

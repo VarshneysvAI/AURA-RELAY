@@ -45,6 +45,8 @@ class Config(BaseModel):
     nvidia_llm_api_key: Optional[str] = Field(default=None)
     nvidia_llm_model: str = Field(default="openai/gpt-oss-20b")
     nvidia_llm_base_url: str = Field(default="https://integrate.api.nvidia.com/v1")
+    groq_api_key: Optional[str] = Field(default=None)
+    groq_model: str = Field(default="llama-3.3-70b-versatile")
     nvidia_tts_api_key: Optional[str] = Field(default=None)
     nvidia_tts_voice: str = Field(default="Magpie-Multilingual.EN-US.Aria")
     nvidia_tts_base_url: str = Field(default="https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com/v1/audio/synthesize")
@@ -95,6 +97,8 @@ class Config(BaseModel):
             nvidia_llm_api_key=os.getenv("NVIDIA_LLM_API_KEY") or None,
             nvidia_llm_model=os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"),
             nvidia_llm_base_url=os.getenv("NVIDIA_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+            groq_api_key=os.getenv("GROQ_API_KEY") or None,
+            groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             nvidia_tts_api_key=os.getenv("NVIDIA_TTS_API_KEY") or None,
             nvidia_tts_voice=os.getenv("NVIDIA_TTS_VOICE", "Magpie-Multilingual.EN-US.Aria"),
             nvidia_tts_base_url=os.getenv("NVIDIA_TTS_BASE_URL", "https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com/v1/audio/synthesize"),

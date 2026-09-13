@@ -115,6 +115,8 @@ class SettingsUpdateRequest(BaseModel):
     anakin_api_key: Optional[str] = None
     nvidia_llm_api_key: Optional[str] = None
     nvidia_llm_model: Optional[str] = None
+    groq_api_key: Optional[str] = None
+    groq_model: Optional[str] = None
     nvidia_tts_api_key: Optional[str] = None
     nvidia_tts_voice: Optional[str] = None
     email_provider: Optional[str] = None
@@ -466,6 +468,9 @@ async def get_settings():
         "nvidia_llm_api_key_masked": mask(cfg.nvidia_llm_api_key),
         "nvidia_llm_configured": bool(cfg.nvidia_llm_api_key),
         "nvidia_llm_model": cfg.nvidia_llm_model,
+        "groq_api_key_masked": mask(cfg.groq_api_key),
+        "groq_configured": bool(cfg.groq_api_key),
+        "groq_model": cfg.groq_model,
         "nvidia_tts_api_key_masked": mask(cfg.nvidia_tts_api_key),
         "nvidia_tts_configured": bool(cfg.nvidia_tts_api_key),
         "nvidia_tts_voice": cfg.nvidia_tts_voice,
@@ -487,6 +492,10 @@ async def update_settings(req: SettingsUpdateRequest):
         env_updates["NVIDIA_LLM_API_KEY"] = req.nvidia_llm_api_key.strip()
     if req.nvidia_llm_model is not None and req.nvidia_llm_model.strip():
         env_updates["NVIDIA_LLM_MODEL"] = req.nvidia_llm_model.strip()
+    if req.groq_api_key is not None and req.groq_api_key.strip():
+        env_updates["GROQ_API_KEY"] = req.groq_api_key.strip()
+    if req.groq_model is not None and req.groq_model.strip():
+        env_updates["GROQ_MODEL"] = req.groq_model.strip()
     if req.nvidia_tts_api_key is not None and req.nvidia_tts_api_key.strip():
         env_updates["NVIDIA_TTS_API_KEY"] = req.nvidia_tts_api_key.strip()
     if req.nvidia_tts_voice is not None and req.nvidia_tts_voice.strip():

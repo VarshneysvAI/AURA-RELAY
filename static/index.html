@@ -302,7 +302,19 @@
 
                     <div class="form-group">
                         <label>LLM Model</label>
-                        <input type="text" id="cfgLlmModel" value="nvidia/nemotron-3.5-lightning-30b-a3b" />
+                        <input type="text" id="cfgLlmModel" value="openai/gpt-oss-20b" />
+                    </div>
+
+                    <!-- Groq LLM Settings -->
+                    <div class="form-group">
+                        <label>Groq API Key (Fallback) <span class="badge-status" id="badgeGroq">Checking...</span></label>
+                        <input type="password" id="cfgGroqKey" placeholder="gsk_..." />
+                        <small class="helper-text">Used if NVIDIA API fails or is rate-limited.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Groq Model</label>
+                        <input type="text" id="cfgGroqModel" value="llama-3.3-70b-versatile" />
                     </div>
 
                     <!-- NVIDIA TTS Settings -->
