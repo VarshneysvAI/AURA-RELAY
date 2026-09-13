@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Portal - OTP Verification</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0f172a;
+            color: #f1f5f9;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: #1e293b;
+            padding: 40px;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 400px;
+            border: 1px solid #334155;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            color: #6366f1;
+        }
+        .subtitle {
+            text-align: center;
+            color: #94a3b8;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #94a3b8;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            background: #334155;
+            border: 1px solid #475569;
+            border-radius: 8px;
+            color: #f1f5f9;
+            font-size: 1rem;
+            text-align: center;
+            letter-spacing: 8px;
+        }
+        input:focus {
+            outline: none;
+            border-color: #6366f1;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: #6366f1;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #8b5cf6;
+        }
+        .error {
+            color: #ef4444;
+            margin-top: 15px;
+            text-align: center;
+            display: none;
+        }
+        .success {
+            color: #22c55e;
+            margin-top: 15px;
+            text-align: center;
+            display: none;
+        }
+        .hint {
+            text-align: center;
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔑 OTP Verification</h1>
+        <p class="subtitle">Enter the code sent to your email</p>
+        
+        <form id="otpForm">
+            <div class="form-group">
+                <label for="otp">Verification Code</label>
+                <input type="text" id="otp" name="otp" placeholder="••••••" maxlength="6" required>
+            </div>
+            
+            <button type="submit" id="submitBtn">Verify</button>
+            
+            <p class="error" id="errorMsg"></p>
+            <p class="success" id="successMsg"></p>
+        </form>
+        
+        <p class="hint">Check the email inbox in AURA Relay UI</p>
+    </div>
+
+    <script>
+        const form = document.getElementById('otpForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const errorMsg = document.getElementById('errorMsg');
+        const successMsg = document.getElementById('successMsg');
+        const otpInput = document.getElementById('otp');
+        
+        // Dynamic button text change (simulates DOM instability)
+        setTimeout(() => {
+            if (submitBtn.textContent === 'Verify') {
+                submitBtn.textContent = 'Continue';
+            }
+        }, 1000);
+        
+        // Auto-format OTP input
+        otpInput.addEventListener('input', (e) => {
+            e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+        });
+        
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const otp = otpInput.value;
+            
+            if (!otp || otp.length !== 6) {
+                errorMsg.textContent = 'Please enter a valid 6-digit code';
+                errorMsg.style.display = 'block';
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/sandbox/verify-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: otp })
+                });
+                
+                if (response.ok) {
+                    successMsg.textContent = 'Verified! Redirecting...';
+                    successMsg.style.display = 'block';
+                    errorMsg.style.display = 'none';
+                    
+                    setTimeout(() => {
+                        window.location.href = '/sandbox/dashboard.html';
+                    }, 1000);
+                } else {
+                    errorMsg.textContent = 'Invalid code. Please try again.';
+                    errorMsg.style.display = 'block';
+                }
+            } catch (err) {
+                errorMsg.textContent = 'Failed to verify. Please try again.';
+                errorMsg.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  aura-relay:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./runtime/screenshots:/app/runtime/screenshots
+    environment:
+      - MODE=sandbox
+      - HEADLESS=true
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+    restart: unless-stopped

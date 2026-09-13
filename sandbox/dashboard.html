@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Secure Portal</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 40px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #6366f1;
+            margin-bottom: 10px;
+        }
+        .welcome {
+            color: #94a3b8;
+            margin-bottom: 30px;
+        }
+        .documents-section {
+            background: #1e293b;
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid #334155;
+        }
+        h2 {
+            margin-bottom: 20px;
+            color: #f1f5f9;
+        }
+        .document-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        .document-card {
+            background: #334155;
+            padding: 25px;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+        .document-card:hover {
+            border-color: #6366f1;
+            transform: translateY(-2px);
+        }
+        .document-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+        .document-name {
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        .document-desc {
+            font-size: 0.85rem;
+            color: #94a3b8;
+        }
+        .success-message {
+            background: #22c55e;
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+            text-align: center;
+        }
+        .dynamic-class {
+            /* Classes may change dynamically */
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Dashboard</h1>
+        <p class="welcome">Welcome back! Select a document to download.</p>
+        
+        <div class="documents-section">
+            <h2>Available Documents</h2>
+            
+            <div class="document-grid">
+                <div class="document-card dynamic-class" id="statementBtn" onclick="selectDocument('Statement')">
+                    <div class="document-icon">📄</div>
+                    <div class="document-name">Download Statement</div>
+                    <div class="document-desc">Account activity summary</div>
+                </div>
+                
+                <div class="document-card dynamic-class" id="taxBtn" onclick="selectDocument('Tax Document')">
+                    <div class="document-icon">📋</div>
+                    <div class="document-name">Download Tax Document</div>
+                    <div class="document-desc">Annual tax statement</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="success-message" id="successMessage">
+            ✅ <span id="selectedDoc"></span> downloaded successfully!
+        </div>
+    </div>
+
+    <script>
+        // Simulate dynamic class changes (DOM instability)
+        setInterval(() => {
+            const cards = document.querySelectorAll('.document-card');
+            cards.forEach((card, index) => {
+                const randomClass = `card-${Date.now()}-${index}`;
+                card.className = `document-card ${randomClass}`;
+            });
+        }, 5000);
+        
+        function selectDocument(docName) {
+            const successMsg = document.getElementById('successMessage');
+            const selectedDoc = document.getElementById('selectedDoc');
+            
+            selectedDoc.textContent = docName;
+            successMsg.style.display = 'block';
+            
+            // Store selection
+            sessionStorage.setItem('selected_document', docName);
+            
+            setTimeout(() => {
+                successMsg.style.display = 'none';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>

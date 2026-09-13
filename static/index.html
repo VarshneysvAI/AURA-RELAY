@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AURA Relay - Ask. Verify. Act.</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-section">
+                <svg class="logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="50" cy="50" r="45" fill="none" stroke="#6366f1" stroke-width="3"/>
+                    <circle cx="50" cy="50" r="35" fill="none" stroke="#8b5cf6" stroke-width="2"/>
+                    <circle cx="50" cy="50" r="25" fill="none" stroke="#a855f7" stroke-width="2"/>
+                    <path d="M50 25 L50 50 L70 60" stroke="#6366f1" stroke-width="3" fill="none" stroke-linecap="round"/>
+                </svg>
+                <div class="title-section">
+                    <h1>AURA Relay</h1>
+                    <p class="tagline">Ask. Verify. Act.</p>
+                </div>
+            </div>
+            <div class="environment-badge" id="envBadge">Sandbox</div>
+        </header>
+
+        <!-- Mission Control Panel -->
+        <section class="mission-control">
+            <div class="input-section">
+                <label for="instruction">Mission Instruction</label>
+                <textarea 
+                    id="instruction" 
+                    placeholder="Enter your instruction (e.g., 'Log into the secure portal, complete OTP verification, and retrieve the tax document.')"
+                    rows="3"
+                >Log into the secure portal, complete OTP verification, and retrieve the tax document.</textarea>
+                <div class="button-group">
+                    <button id="startBtn" class="btn btn-primary">
+                        <span class="btn-icon">▶</span> Start
+                    </button>
+                    <button id="stopBtn" class="btn btn-danger" disabled>
+                        <span class="btn-icon">⏹</span> Stop
+                    </button>
+                    <button id="retryBtn" class="btn btn-warning" disabled>
+                        <span class="btn-icon">↻</span> Retry
+                    </button>
+                </div>
+            </div>
+            
+            <div class="status-section">
+                <div class="status-card">
+                    <div class="status-label">Status</div>
+                    <div class="status-value" id="statusValue">idle</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Current Step</div>
+                    <div class="status-value" id="currentStep">-</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Next Step</div>
+                    <div class="status-value" id="nextStep">-</div>
+                </div>
+                <div class="status-card full-width">
+                    <div class="status-label">Agent Reason</div>
+                    <div class="status-value" id="reasonValue">Waiting for instruction...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Content Grid -->
+        <div class="main-grid">
+            <!-- Transparency Timeline -->
+            <section class="timeline-section">
+                <h2>Live Transparency Timeline</h2>
+                <div class="timeline" id="timeline">
+                    <div class="timeline-item info">
+                        <div class="timeline-time">--:--:--</div>
+                        <div class="timeline-content">
+                            <div class="timeline-type">system</div>
+                            <div class="timeline-message">Ready to start. Enter instruction above.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Browser Evidence Panel -->
+            <section class="evidence-section">
+                <h2>Browser Evidence</h2>
+                <div class="screenshot-container">
+                    <img id="mainScreenshot" src="" alt="Latest screenshot will appear here" />
+                    <div class="no-screenshot" id="noScreenshot">No screenshots yet</div>
+                </div>
+                <div class="screenshot-thumbnails" id="screenshotThumbnails"></div>
+            </section>
+
+            <!-- Email Panel -->
+            <section class="email-section">
+                <h2>Email Inbox</h2>
+                <div class="email-list" id="emailList">
+                    <div class="email-empty">Waiting for emails...</div>
+                </div>
+            </section>
+
+            <!-- Human-in-the-Loop Panel -->
+            <section class="hitl-section">
+                <h2>Human-in-the-Loop</h2>
+                <div class="question-container" id="questionContainer">
+                    <div class="question-text" id="questionText">No pending questions</div>
+                </div>
+                <div class="answer-form">
+                    <input 
+                        type="text" 
+                        id="answerInput" 
+                        placeholder="Type your answer here..."
+                        disabled
+                    />
+                    <button id="sendAnswerBtn" class="btn btn-primary" disabled>Send</button>
+                    <button id="voiceBtn" class="btn btn-voice" title="Use voice input">
+                        🎤
+                    </button>
+                </div>
+                <div class="voice-status" id="voiceStatus">Voice: Not supported</div>
+            </section>
+        </div>
+
+        <!-- Result Panel -->
+        <section class="result-section" id="resultSection" style="display: none;">
+            <h2>Mission Result</h2>
+            <div class="result-content">
+                <div class="result-status" id="resultStatus"></div>
+                <div class="result-message" id="resultMessage"></div>
+                <div class="result-evidence" id="resultEvidence"></div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>AURA Relay v1.0.0 | Transparent AI Agent</p>
+        </footer>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

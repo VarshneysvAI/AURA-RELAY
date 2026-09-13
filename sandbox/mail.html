@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inbox - Email Viewer</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 20px;
+        }
+        h1 {
+            color: #6366f1;
+            margin-bottom: 20px;
+        }
+        .refresh-btn {
+            background: #6366f1;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .email-list {
+            max-width: 800px;
+        }
+        .email-item {
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #334155;
+        }
+        .email-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .email-sender {
+            font-weight: 600;
+            color: #6366f1;
+        }
+        .email-time {
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+        .email-subject {
+            font-size: 1.1rem;
+            margin-bottom: 10px;
+        }
+        .email-body {
+            color: #94a3b8;
+            line-height: 1.6;
+        }
+        .otp-code {
+            background: #334155;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 1.2rem;
+            letter-spacing: 4px;
+            display: inline-block;
+            margin-top: 10px;
+        }
+        .empty {
+            text-align: center;
+            color: #94a3b8;
+            padding: 40px;
+        }
+        .auto-refresh {
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>📧 Inbox</h1>
+    <button class="refresh-btn" onclick="loadEmails()">Refresh</button>
+    
+    <div class="email-list" id="emailList">
+        <div class="empty">Loading emails...</div>
+    </div>
+    
+    <p class="auto-refresh">Auto-refreshes every 3 seconds</p>
+
+    <script>
+        async function loadEmails() {
+            try {
+                const response = await fetch('/api/inbox');
+                const data = await response.json();
+                
+                const emailList = document.getElementById('emailList');
+                
+                if (data.emails.length === 0) {
+                    emailList.innerHTML = '<div class="empty">No emails yet</div>';
+                    return;
+                }
+                
+                emailList.innerHTML = '';
+                
+                // Show newest first
+                data.emails.reverse().forEach(email => {
+                    const item = document.createElement('div');
+                    item.className = 'email-item';
+                    
+                    // Extract OTP from body if present
+                    const otpMatch = email.body.match(/\d{4,8}/);
+                    const otpDisplay = otpMatch 
+                        ? `<div class="otp-code">${otpMatch[0]}</div>` 
+                        : '';
+                    
+                    item.innerHTML = `
+                        <div class="email-header">
+                            <span class="email-sender">${escapeHtml(email.sender)}</span>
+                            <span class="email-time">${new Date(email.timestamp).toLocaleString()}</span>
+                        </div>
+                        <div class="email-subject">${escapeHtml(email.subject)}</div>
+                        <div class="email-body">${escapeHtml(email.body)}</div>
+                        ${otpDisplay}
+                    `;
+                    
+                    emailList.appendChild(item);
+                });
+            } catch (err) {
+                console.error('Failed to load emails:', err);
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Initial load and auto-refresh
+        loadEmails();
+        setInterval(loadEmails, 3000);
+    </script>
+</body>
+</html>
