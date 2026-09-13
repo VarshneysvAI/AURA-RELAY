@@ -115,10 +115,17 @@ class AgentExecutor:
         except Exception:
             pass
 
-    def submit_answer(self, answer: str, question_id: int) -> bool:
-        self.state.answer_question(answer, question_id)
+    def submit_answer(self, answer: str, question_id: Optional[int] = None) -> bool:
+        if question_id is not None:
+            self.state.answer_question(answer, question_id)
+        else:
+            current_q_id = self.state.get_state().question_id
+            if current_q_id is not None:
+                self.state.answer_question(answer, current_q_id)
+        
         self._last_user_answer = answer
-        self._question_resolved.set()
+        self.state.add_event("user_answer_received", f"User answered: {answer}")
+        self._question_resolved.set()  # Signal resume
         return True
 
     async def run(self, instruction: str, gathered_info: Optional[dict] = None):
