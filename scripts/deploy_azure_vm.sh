@@ -54,6 +54,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 # 4. Install Playwright browser and OS libraries
+export PLAYWRIGHT_BROWSERS_PATH=0
 python3 -m playwright install --with-deps chromium
 
 # 5. Create runtime data folders
@@ -80,6 +81,7 @@ Type=simple
 User=$USER
 WorkingDirectory=$INSTALL_DIR
 Environment="PATH=$INSTALL_DIR/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PLAYWRIGHT_BROWSERS_PATH=0"
 EnvironmentFile=$INSTALL_DIR/.env
 ExecStart=$INSTALL_DIR/.venv/bin/python main.py
 Restart=always
@@ -104,7 +106,9 @@ REMOTE=$(git rev-parse origin/main 2>/dev/null || echo "")
 if [ -n "$LOCAL" ] && [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
     echo "[GitSync] New changes detected on origin/main ($REMOTE). Updating..."
     git reset --hard origin/main
+    export PLAYWRIGHT_BROWSERS_PATH=0
     /opt/aura-relay/.venv/bin/pip install -r requirements.txt --quiet || true
+    /opt/aura-relay/.venv/bin/python -m playwright install chromium || true
     systemctl restart aura-relay
     echo "[GitSync] AURA Relay reloaded successfully with latest git commit."
 fi

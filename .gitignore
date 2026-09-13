@@ -59,3 +59,4 @@ test_query.py
 # Docker
 docker-compose.override.yml
 .skills/
+scripts/setup_env_on_vm.sh
