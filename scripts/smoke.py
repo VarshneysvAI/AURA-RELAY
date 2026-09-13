@@ -103,12 +103,12 @@ def run_smoke_test():
         return False
     
     # Step 4: Answer the question
-    print("\nAnswering question with 'yes'...")
+    print("\nAnswering question with 'Tax document'...")
     
     try:
         response = httpx.post(
             f"{BASE_URL}/api/answer",
-            json={"answer": "yes"},
+            json={"answer": "Tax document"},
             timeout=10
         )
         
@@ -124,15 +124,16 @@ def run_smoke_test():
     # Step 5: Wait for completion
     print("\nWaiting for task completion...")
     
-    for i in range(30):  # Wait up to 30 seconds
-        time.sleep(2)
+    for i in range(60):  # Wait up to 60 seconds (increased)
+        time.sleep(3)  # Increased polling interval
         
         try:
             response = httpx.get(f"{BASE_URL}/api/state", timeout=10)
             state = response.json()
             
             status = state.get("status", "")
-            print(f"  Status: {status}")
+            step = state.get("current_step", "-")[:50]
+            print(f"  Status: {status}, Step: {step}")
             
             if status == "done":
                 print(f"\n✓ Task completed successfully!")
