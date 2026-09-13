@@ -145,7 +145,7 @@ sudo tee /etc/nginx/sites-available/aura-relay > /dev/null <<EOF
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
-    server_name _;
+    server_name aura-relay-app.centralindia.cloudapp.azure.com _;
 
     client_max_body_size 50M;
 
@@ -178,6 +178,10 @@ sudo systemctl enable aura-relay
 sudo systemctl restart aura-relay
 sudo systemctl enable aura-git-sync.timer
 sudo systemctl start aura-git-sync.timer
+
+# 11. Configure HTTPS with Certbot (Let's Encrypt)
+echo "Configuring HTTPS via Let's Encrypt..."
+sudo certbot --nginx -d aura-relay-app.centralindia.cloudapp.azure.com --non-interactive --agree-tos --register-unsafely-without-email --redirect || true
 
 echo "========================================================="
 echo "   AURA Relay Successfully Deployed and Running!         "
