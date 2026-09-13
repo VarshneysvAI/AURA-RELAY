@@ -171,6 +171,44 @@ def persist_event(event_data: dict) -> None:
         pass
 
 
+async def _git_auto_sync_loop():
+    """Periodically fetches latest commits from git origin/main and applies them automatically."""
+    await asyncio.sleep(10)
+    while True:
+        try:
+            await asyncio.sleep(25)
+            proc = await asyncio.create_subprocess_exec(
+                "git", "fetch", "origin", "main",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            if proc.returncode == 0:
+                p_local = await asyncio.create_subprocess_exec(
+                    "git", "rev-parse", "HEAD",
+                    stdout=asyncio.subprocess.PIPE
+                )
+                stdout_l, _ = await p_local.communicate()
+                p_remote = await asyncio.create_subprocess_exec(
+                    "git", "rev-parse", "origin/main",
+                    stdout=asyncio.subprocess.PIPE
+                )
+                stdout_r, _ = await p_remote.communicate()
+                loc_h = stdout_l.strip()
+                rem_h = stdout_r.strip()
+                if loc_h and rem_h and loc_h != rem_h:
+                    logger.info(f"New git commit detected ({rem_h.decode()[:7]})! Auto-syncing...")
+                    p_pull = await asyncio.create_subprocess_exec(
+                        "git", "reset", "--hard", "origin/main",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    await p_pull.communicate()
+                    state_manager.add_event("git_sync", f"Auto-synced repository to {rem_h.decode()[:7]}")
+        except Exception:
+            await asyncio.sleep(25)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Modern lifespan handler replacing deprecated startup/shutdown events."""
@@ -186,7 +224,9 @@ async def lifespan(app: FastAPI):
         current_loop.set_exception_handler(_proactor_handler)
     except Exception:
         pass
+    sync_task = asyncio.create_task(_git_auto_sync_loop())
     yield
+    sync_task.cancel()
     # Shutdown: Graceful browser cleanup
     agent = get_agent()
     if agent and hasattr(agent, 'browser') and agent.browser:
@@ -204,6 +244,7 @@ async def lifespan(app: FastAPI):
                 agent.loop.call_soon_threadsafe(agent.loop.stop)
         except Exception:
             pass
+
 
 
 # Initialize application with modern lifespan handler
@@ -582,6 +623,52 @@ async def clear_logs():
     """Clear backend server logs buffer."""
     log_handler.buffer.clear()
     return {"status": "cleared"}
+
+
+@app.post("/api/git/sync")
+async def trigger_git_sync():
+    """Manual trigger to fetch and apply latest changes from GitHub."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "fetch", "origin", "main",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await proc.communicate()
+        p_pull = await asyncio.create_subprocess_exec(
+            "git", "reset", "--hard", "origin/main",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout_p, stderr_p = await p_pull.communicate()
+        state_manager.add_event("git_sync", "Manually synced latest repository changes!")
+        return {"status": "success", "detail": stdout_p.decode()}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
+@app.get("/api/git/status")
+async def get_git_status():
+    """Check git repository commit hash and branch."""
+    try:
+        p_local = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "--short", "HEAD",
+            stdout=asyncio.subprocess.PIPE
+        )
+        stdout_l, _ = await p_local.communicate()
+        p_msg = await asyncio.create_subprocess_exec(
+            "git", "log", "-1", "--pretty=%B",
+            stdout=asyncio.subprocess.PIPE
+        )
+        stdout_m, _ = await p_msg.communicate()
+        return {
+            "status": "ok",
+            "commit": stdout_l.decode().strip(),
+            "message": stdout_m.decode().strip()
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 
 @app.post("/api/start")
