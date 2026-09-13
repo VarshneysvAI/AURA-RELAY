@@ -266,34 +266,40 @@ class AgentExecutor:
                     self.state.add_event("warning", f"Could not capture state after human takeover: {e}")
 
             # Observe DOM
-            url = self.browser.page.url
-            title = await self.browser.get_title()
-            
-            # Extract prominent visible interactive elements and page content summary
-            page_info = await self.browser.page.evaluate("""
-                () => {
-                    const items = [];
-                    const tags = document.querySelectorAll('input, button, a[href], [role="button"], [role="link"], select, textarea, div.price, span.price, div[data-component-type="s-search-result"]');
-                    for (const el of tags) {
-                        if (el.offsetParent !== null) { // visible
-                            const text = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || '').trim();
-                            if (text && text.length < 80) {
-                                items.push({
-                                    tag: el.tagName.toLowerCase(),
-                                    id: el.id || '',
-                                    text: text,
-                                    type: el.type || '',
-                                    placeholder: el.placeholder || ''
-                                });
+            try:
+                url = self.browser.page.url
+                title = await self.browser.get_title()
+                
+                # Extract prominent visible interactive elements and page content summary
+                page_info = await self.browser.page.evaluate("""
+                    () => {
+                        const items = [];
+                        const tags = document.querySelectorAll('input, button, a[href], [role="button"], [role="link"], select, textarea, div.price, span.price, div[data-component-type="s-search-result"]');
+                        for (const el of tags) {
+                            if (el.offsetParent !== null) { // visible
+                                const text = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || '').trim();
+                                if (text && text.length < 80) {
+                                    items.push({
+                                        tag: el.tagName.toLowerCase(),
+                                        id: el.id || '',
+                                        text: text,
+                                        type: el.type || '',
+                                        placeholder: el.placeholder || ''
+                                    });
+                                }
                             }
+                            if (items.length >= 35) break;
                         }
-                        if (items.length >= 35) break;
+                        const heading = document.querySelector('h1, h2')?.textContent || '';
+                        const snippets = Array.from(document.querySelectorAll('p, article, .s-result-item')).map(e => (e.textContent || '').trim()).filter(Boolean).join(' | ').slice(0, 500);
+                        return { elements: items, page_summary: (heading + ': ' + snippets).trim() };
                     }
-                    const heading = document.querySelector('h1, h2')?.textContent || '';
-                    const snippets = Array.from(document.querySelectorAll('p, article, .s-result-item')).map(e => (e.textContent || '').trim()).filter(Boolean).join(' | ').slice(0, 500);
-                    return { elements: items, page_summary: (heading + ': ' + snippets).trim() };
-                }
-            """)
+                """)
+            except Exception as e:
+                self.state.add_event("warning", f"DOM observe error (possibly due to tab change): {e}")
+                await asyncio.sleep(1)
+                continue
+                
             elements = page_info.get("elements", [])
             if page_info.get("page_summary"):
                 summary_key = f"page_summary_step_{iteration}"
@@ -338,6 +344,9 @@ class AgentExecutor:
                     action_history=action_history,
                     gathered_info=gathered_info,
                 )
+            
+            # Clear last_user_answer so it doesn't permanently pollute future iterations
+            gathered_info.pop("last_user_answer", None)
             
             action_type = decision.get("action", "done")
             target = decision.get("target", "")
@@ -648,6 +657,10 @@ class AgentExecutor:
             await asyncio.sleep(0.3)
                 
     def _get_last_user_answer(self) -> str:
+        if self._last_user_answer:
+            ans = self._last_user_answer
+            self._last_user_answer = ""
+            return ans
         events = self.state.get_state().events
         for event in reversed(events):
             if event.event_type == "user_answer_received":

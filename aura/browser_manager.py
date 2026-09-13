@@ -132,7 +132,21 @@ class BrowserManager:
                 self._browser = browser
 
         self._launched = True
+        
+        # Track new tabs
+        if self._context:
+            self._context.on("page", self._handle_new_page)
+            
         print(f"Browser launched successfully (headless={self.headless})")
+
+    async def _handle_new_page(self, page: Page) -> None:
+        """Automatically switch focus to newly opened tabs."""
+        print(f"New tab opened, switching context to: {page.url}")
+        self._page = page
+        try:
+            await page.bring_to_front()
+        except Exception:
+            pass
 
     async def bring_to_front(self) -> None:
         """Bring the active browser page to the foreground for human interaction."""
