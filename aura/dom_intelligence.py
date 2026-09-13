@@ -231,3 +231,131 @@ class DomIntelligence:
             return True
         except Exception:
             return False
+    
+    async def dismiss_overlays(self) -> bool:
+        """
+        Silent Killer #1: Modal Buster
+        Auto-dismiss cookie banners, consent popups, and newsletter modals.
+        """
+        overlay_keywords = [
+            "Accept", "I agree", "Got it", "Close", "Dismiss", 
+            "Allow", "Consent", "Continue", "OK", "Yes"
+        ]
+        
+        dismissed = False
+        for keyword in overlay_keywords:
+            try:
+                # Look for buttons containing these words
+                locator = self.page.locator(
+                    f"button:has-text('{keyword}'), "
+                    f"[role='button']:has-text('{keyword}'), "
+                    f"a:has-text('{keyword}'), "
+                    f"input[type='button'][value*='{keyword}']"
+                ).first
+                
+                # Only click if visible and enabled
+                if await locator.is_visible(timeout=800):
+                    is_enabled = await locator.is_enabled()
+                    if is_enabled:
+                        await locator.click(timeout=2000)
+                        await self.page.wait_for_timeout(500)  # Wait for animation
+                        dismissed = True
+            except Exception:
+                pass  # Not found or not clickable, which is fine
+        
+        return dismissed
+    
+    async def safe_click(self, target: str, element_type: str = "button", 
+                         max_retries: int = 5) -> bool:
+        """
+        Silent Killer #2: Stale Element Protection
+        Safely click an element with auto-wait, retry logic, and overlay dismissal.
+        """
+        # First dismiss any overlays
+        await self.dismiss_overlays()
+        
+        for attempt in range(max_retries):
+            try:
+                # Use Playwright's role-based locator with auto-wait
+                locator = self.page.get_by_role(element_type, name=target)
+                
+                # Wait for element to be actionable
+                await locator.wait_for(state="attached", timeout=3000)
+                await locator.wait_for(state="visible", timeout=3000)
+                await locator.wait_for(state="enabled", timeout=3000)
+                
+                # Highlight before clicking (Iron Man Vision)
+                await self.highlight_element(target, element_type)
+                
+                # Click with force option if needed
+                await locator.click(timeout=3000, force=False)
+                return True
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                
+                # If element is stale/intercepted, retry
+                if any(kw in error_msg for kw in ["stale", "intercepted", "attached", "visible"]):
+                    await self.page.wait_for_timeout(500 * (attempt + 1))  # Exponential backoff
+                    await self.dismiss_overlays()  # Try dismissing again
+                    continue
+                else:
+                    # Different error, log and retry once more
+                    print(f"Click attempt {attempt + 1} failed: {e}")
+                    await self.page.wait_for_timeout(500)
+        
+        return False
+    
+    async def highlight_element(self, target: str, element_type: str = "button") -> bool:
+        """
+        WOW FACTOR: Iron Man Vision
+        Draws a glowing red bounding box around the target element.
+        """
+        try:
+            # Find the element
+            locator = self.page.get_by_role(element_type, name=target)
+            
+            # Get the first matching element
+            element = locator.first
+            
+            # Check if element exists and is visible
+            if not await element.is_visible():
+                return False
+            
+            # Inject JavaScript to draw a glowing red box
+            await element.evaluate("""
+                (el) => {
+                    // Store original styles for restoration if needed
+                    el.setAttribute('data-original-outline', el.style.outline || '');
+                    el.setAttribute('data-original-shadow', el.style.boxShadow || '');
+                    
+                    // Apply Iron Man vision styles
+                    el.style.outline = '4px solid #FF0000';
+                    el.style.outlineOffset = '3px';
+                    el.style.boxShadow = '0 0 25px rgba(255, 0, 0, 0.9), 0 0 10px rgba(255, 0, 0, 0.7)';
+                    el.style.transition = 'all 0.2s ease-in-out';
+                    el.style.zIndex = '9999';
+                    el.style.position = 'relative';
+                }
+            """)
+            
+            # Brief pause so the highlight is visible (for screenshots/demo)
+            await self.page.wait_for_timeout(400)
+            
+            return True
+            
+        except Exception as e:
+            # If highlighting fails, continue without it
+            print(f"Highlight failed: {e}")
+            return False
+    
+    async def get_page_hash(self) -> str:
+        """Get a hash representing current page state for circuit breaker."""
+        try:
+            title = await self.page.title()
+            url = self.page.url
+            content = await self.page.content()
+            # Simple hash based on title, URL, and content length
+            return f"{title}:{url}:{len(content)}"
+        except Exception:
+            return "unknown"

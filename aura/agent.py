@@ -251,6 +251,46 @@ class AgentExecutor:
         else:
             self.state.add_event("warning", "Task completed but success message not explicitly found")
 
+    async def _execute_with_circuit_breaker(self, action_name: str, target_element: str, 
+                                             click_func) -> bool:
+        """
+        Silent Killer #3: Circuit Breaker - Prevents infinite loops.
+        If the same action fails 3 times on the same page, ask human for help.
+        """
+        # Get current page state hash
+        page_hash = await self.dom.get_page_hash()
+        
+        # Initialize or get action attempts counter
+        if not hasattr(self, '_action_attempts'):
+            self._action_attempts = {}
+        
+        key = f"{page_hash}:{action_name}:{target_element}"
+        self._action_attempts[key] = self._action_attempts.get(key, 0) + 1
+        
+        # CIRCUIT BREAKER: If we've tried the same thing 3 times
+        if self._action_attempts[key] >= 3:
+            self.state.add_event("warning", f"Circuit breaker triggered! Tried '{action_name}' on '{target_element}' 3 times with no change.")
+            
+            # Force human intervention
+            question = f"I'm stuck. I tried {action_name} on '{target_element}' but nothing happened after 3 attempts. The page seems unchanged. What should I do?"
+            self.state.ask_question(question)
+            self.state.add_event("user_question", "Waiting for user guidance...")
+            
+            # Wait for user answer
+            await self._wait_for_resume()
+            
+            # Reset counter after user intervention
+            self._action_attempts[key] = 0
+            return True  # User took over
+        
+        # Execute the action
+        try:
+            result = await click_func()
+            return result
+        except Exception as e:
+            self.state.add_event("retrying", f"Attempt {self._action_attempts[key]} failed: {str(e)}")
+            raise
+    
     async def _wait_for_resume(self) -> None:
         """Pause execution until user answers or stop is requested."""
         while self.state.get_state().question is not None and not self._stop_requested:
