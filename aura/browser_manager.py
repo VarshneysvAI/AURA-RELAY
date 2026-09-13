@@ -239,6 +239,15 @@ class BrowserManager:
             print(f"Screenshot failed: {e}")
             return ""
 
+    async def screenshot_bytes(self, image_type: str = "jpeg", quality: int = 65) -> Optional[bytes]:
+        """Capture fast in-memory screenshot bytes for live viewport streaming."""
+        if not self._page or self._page.is_closed():
+            return None
+        try:
+            return await self._page.screenshot(type=image_type, quality=quality, timeout=2000)
+        except Exception:
+            return None
+
     async def get_content(self) -> str:
         """Get the page HTML content."""
         return await self._page.content()

@@ -155,25 +155,35 @@ class DomIntelligence:
         return None
     
     async def find_input_field(self, label_or_placeholder: str) -> Optional[Locator]:
-        """Find an input field by label or placeholder."""
-        candidates = []
-        target = label_or_placeholder.lower().strip()
+        """Find an input or textarea field by direct CSS selector, label, or placeholder."""
+        raw_target = (label_or_placeholder or "").strip()
+        target = raw_target.lower()
         
-        # Try various strategies
+        # Strategy 0: If target looks like a valid CSS selector, try directly first
+        if any(c in raw_target for c in ["#", ".", "[", ">", ":"]) or raw_target in ("textarea", "input"):
+            try:
+                direct_loc = self.page.locator(raw_target).first
+                if await direct_loc.is_visible(timeout=1200):
+                    return direct_loc
+            except Exception:
+                pass
+
+        # Try various input/textarea strategies
         strategies = [
-            (f'input[placeholder*="{target}" i]', "placeholder"),
-            (f'input[aria-label*="{target}" i]', "aria-label"),
-            (f'input[data-testid="{target}"]', "data-testid"),
-            (f'input[name*="{target}" i]', "name attribute"),
-            (f'input[id*="{target}" i]', "id attribute"),
-            (f'label:has-text("{target}") + input', "label+input"),
-            (f'//label[contains(text(), "{target}")]/following-sibling::input', "xpath label"),
+            (f'input[placeholder*="{target}" i], textarea[placeholder*="{target}" i]', "placeholder"),
+            (f'input[aria-label*="{target}" i], textarea[aria-label*="{target}" i]', "aria-label"),
+            (f'input[data-testid*="{target}" i], textarea[data-testid*="{target}" i]', "data-testid"),
+            (f'input[name*="{target}" i], textarea[name*="{target}" i]', "name attribute"),
+            (f'input[id*="{target}" i], textarea[id*="{target}" i]', "id attribute"),
+            (f'label:has-text("{target}") + input, label:has-text("{target}") + textarea', "label+input"),
+            (f'//label[contains(text(), "{target}")]/following-sibling::input | //label[contains(text(), "{target}")]/following-sibling::textarea', "xpath label"),
+            (f'input[type="search"], textarea, input[type="text"]', "generic fallback search input"),
         ]
         
         for selector, strategy in strategies:
             try:
                 locator = self.page.locator(selector).first
-                await locator.wait_for(state="visible", timeout=3000)
+                await locator.wait_for(state="visible", timeout=1200)
                 return locator
             except Exception:
                 continue
@@ -181,17 +191,97 @@ class DomIntelligence:
         return None
     
     async def fill_input(self, label: str, value: str) -> bool:
-        """Fill an input field intelligently."""
+        """Fill an input field or textarea intelligently."""
         input_field = await self.find_input_field(label)
         
-        if input_field is None:
-            return False
+        if input_field is not None:
+            try:
+                await input_field.fill(value)
+                return True
+            except Exception:
+                try:
+                    await input_field.click()
+                    await self.page.keyboard.type(value)
+                    return True
+                except Exception:
+                    pass
         
+        # Direct fallback on raw label if it was a CSS selector
+        if any(c in label for c in ["#", ".", "[", ">", ":"]):
+            try:
+                await self.page.fill(label, value, timeout=2000)
+                return True
+            except Exception:
+                pass
+
+        return False
+    
+    async def detect_captcha(self) -> Dict[str, Any]:
+        """
+        Detects Google 'unusual traffic', reCAPTCHA, Cloudflare Turnstile/Challenge,
+        or 'I am not a robot' checkpoints.
+        """
         try:
-            await input_field.fill(value)
-            return True
+            url = self.page.url.lower()
+            text = (await self.page.evaluate("() => (document.body?.innerText || '').slice(0, 3000)")).lower()
+            
+            captcha_signatures = [
+                "i'm not a robot",
+                "i am not a robot",
+                "unusual traffic from your computer network",
+                "verify you are human",
+                "checking your browser",
+                "attention required! | cloudflare",
+                "just a moment...",
+                "please solve the challenge below",
+                "security verification",
+                "bot detection",
+            ]
+            for sig in captcha_signatures:
+                if sig in text:
+                    return {"detected": True, "type": sig, "url": self.page.url}
+
+            iframe_signatures = [
+                'iframe[src*="recaptcha"]',
+                'iframe[title*="recaptcha" i]',
+                'iframe[src*="challenges.cloudflare.com"]',
+                'iframe[src*="turnstile"]',
+                '.g-recaptcha',
+                '#cf-turnstile',
+                '#captcha-form',
+            ]
+            for sel in iframe_signatures:
+                if await self.check_element_exists(sel, timeout=300):
+                    return {"detected": True, "type": sel, "url": self.page.url}
+            
+            if "google.com/sorry/index" in url:
+                return {"detected": True, "type": "google_sorry_captcha", "url": self.page.url}
         except Exception:
-            return False
+            pass
+        return {"detected": False, "type": "", "url": ""}
+
+    async def try_click_captcha_checkbox(self) -> bool:
+        """Attempt to click interactive 'I'm not a robot' or Cloudflare checkboxes."""
+        try:
+            for frame in self.page.frames:
+                for selector in [
+                    '.recaptcha-checkbox-border',
+                    '#recaptcha-anchor',
+                    'input[type="checkbox"]',
+                    '[role="checkbox"]',
+                    '.cb-lb',
+                ]:
+                    try:
+                        loc = frame.locator(selector).first
+                        if await loc.is_visible(timeout=500):
+                            await loc.click(timeout=1500)
+                            await self.page.wait_for_timeout(1000)
+                            return True
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return False
     
     async def click_element(self, target: str, element_type: str = "button") -> bool:
         """Click an element intelligently."""

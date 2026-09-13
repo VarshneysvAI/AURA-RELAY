@@ -53,14 +53,15 @@ log_handler = InMemoryLogHandler(capacity=500)
 log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
 log_handler.setFormatter(log_formatter)
 
-# Attach handler to root logger and key component loggers
+# Attach handler to root logger (child loggers propagate to root cleanly)
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 root_logger.addHandler(log_handler)
 
-for log_name in ["uvicorn", "uvicorn.access", "uvicorn.error", "aura.llm", "aura.tts", "aura.anakin", "fastapi"]:
+for log_name in ["uvicorn", "uvicorn.access", "uvicorn.error", "aura", "fastapi"]:
     l = logging.getLogger(log_name)
-    l.addHandler(log_handler)
+    l.setLevel(logging.INFO)
+    l.propagate = True
 
 # Load configuration
 config = get_config()
@@ -742,100 +743,84 @@ async def retry_step():
     return {"status": "retrying"}
 
 
+@app.get("/api/browser/stream")
+async def browser_stream():
+    """Real-time MJPEG live stream of the active browser viewport."""
+    async def mjpeg_generator():
+        boundary = "frame"
+        while True:
+            agent = get_agent()
+            frame_bytes = None
+            if agent:
+                frame_bytes = await agent.safe_get_live_frame(image_type="jpeg", quality=65)
+            
+            if frame_bytes:
+                yield (
+                    b"--" + boundary.encode() + b"\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(frame_bytes)).encode() + b"\r\n\r\n"
+                    + frame_bytes + b"\r\n"
+                )
+                await asyncio.sleep(0.18)  # ~5-6 FPS smooth live video stream
+            else:
+                await asyncio.sleep(0.4)
+
+    return StreamingResponse(
+        mjpeg_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "close",
+        }
+    )
+
+
+@app.get("/api/browser/live.jpg")
+async def browser_live_jpeg():
+    """Retrieve single latest live JPEG frame of the active browser."""
+    agent = get_agent()
+    if agent:
+        frame_bytes = await agent.safe_get_live_frame(image_type="jpeg", quality=75)
+        if frame_bytes:
+            from fastapi.responses import Response
+            return Response(content=frame_bytes, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+    raise HTTPException(status_code=404, detail="Browser frame not available")
+
+
 @app.post("/api/browser/click")
 async def browser_click(req: BrowserClickRequest):
-    """Directly click on the browser page at the given relative coordinates."""
+    """Directly click on the browser page at the given relative coordinates safely."""
     agent = get_agent()
     if not hasattr(agent, "browser") or not agent.browser:
         raise HTTPException(status_code=400, detail="Browser not available")
-    
     try:
-        await agent.browser.ensure_launched()
-        page = agent.browser.page
-        if not page:
-            raise HTTPException(status_code=400, detail="Browser page not available")
-            
-        viewport = page.viewport_size or {"width": 1280, "height": 800}
-        if not page.viewport_size:
-            try:
-                dim = await page.evaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")
-                if dim and dim.get("width"):
-                    viewport = dim
-            except Exception:
-                pass
-
-        click_x = max(0, min(viewport["width"], req.x_ratio * viewport["width"]))
-        click_y = max(0, min(viewport["height"], req.y_ratio * viewport["height"]))
-
-        await page.mouse.click(click_x, click_y)
-        await asyncio.sleep(0.5)
-
-        filename = await agent.browser.screenshot("user_click.png")
-        if filename:
-            state_manager.add_screenshot(filename, "User Viewport Click", f"/screenshots/{filename}")
-        return {
-            "status": "clicked",
-            "screenshot": f"/screenshots/{filename}" if filename else None,
-            "x": click_x,
-            "y": click_y,
-            "url": page.url,
-            "title": await agent.browser.get_title()
-        }
+        return await agent.safe_click_ratio(req.x_ratio, req.y_ratio)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/browser/type")
 async def browser_type(req: BrowserTypeRequest):
-    """Directly type text into the active/focused browser element."""
+    """Directly type text into the active/focused browser element safely."""
     agent = get_agent()
     if not hasattr(agent, "browser") or not agent.browser:
         raise HTTPException(status_code=400, detail="Browser not available")
-    
     try:
-        await agent.browser.ensure_launched()
-        page = agent.browser.page
-        if not page:
-            raise HTTPException(status_code=400, detail="Browser page not available")
-
-        if req.text:
-            await page.keyboard.type(req.text)
-        if req.press_enter:
-            await page.keyboard.press("Enter")
-        await asyncio.sleep(0.5)
-
-        filename = await agent.browser.screenshot("user_type.png")
-        if filename:
-            state_manager.add_screenshot(filename, "User Viewport Type", f"/screenshots/{filename}")
-        return {
-            "status": "typed",
-            "screenshot": f"/screenshots/{filename}" if filename else None,
-            "url": page.url,
-            "title": await agent.browser.get_title()
-        }
+        return await agent.safe_type(req.text, req.press_enter)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/browser/navigate")
 async def browser_navigate(req: BrowserNavigateRequest):
-    """Directly navigate the browser to a given URL."""
+    """Directly navigate the browser to a given URL safely."""
     agent = get_agent()
     if not hasattr(agent, "browser") or not agent.browser:
         raise HTTPException(status_code=400, detail="Browser not available")
-    
     try:
-        await agent.browser.ensure_launched()
-        await agent.browser.navigate(req.url)
-        filename = await agent.browser.screenshot("user_nav.png")
-        if filename:
-            state_manager.add_screenshot(filename, "User Viewport Nav", f"/screenshots/{filename}")
-        return {
-            "status": "navigated",
-            "screenshot": f"/screenshots/{filename}" if filename else None,
-            "url": agent.browser.page.url if agent.browser.page else req.url,
-            "title": await agent.browser.get_title() if agent.browser.page else ""
-        }
+        return await agent.safe_navigate(req.url)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

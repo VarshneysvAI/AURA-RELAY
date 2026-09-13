@@ -516,6 +516,7 @@ class NvidiaLLMProvider:
             "- {\"action\": \"navigate\", \"value\": \"https://...\", \"reasoning\": \"...\", \"confidence\": 0.95}\n"
             "- {\"action\": \"click\", \"target\": \"selector or element text\", \"reasoning\": \"...\", \"confidence\": 0.9}\n"
             "- {\"action\": \"fill\", \"target\": \"selector or element text\", \"value\": \"text to fill\", \"reasoning\": \"...\", \"confidence\": 0.9}\n"
+            "- {\"action\": \"press_key\", \"value\": \"Enter\", \"reasoning\": \"Submit search or form with Enter key\", \"confidence\": 0.9}\n"
             "- {\"action\": \"solve_otp\", \"target\": \"otp input selector\", \"reasoning\": \"Waiting for or filling OTP\", \"confidence\": 0.9}\n"
             "- {\"action\": \"ask_user\", \"value\": \"Spoken question for TTS to ask the user aloud\", \"reasoning\": \"Why user help or choice is needed\", \"confidence\": 0.9}\n"
             "- {\"action\": \"done\", \"value\": \"Substantive, friendly coworker summary of findings and what was accomplished\", \"reasoning\": \"Goal reached\", \"confidence\": 1.0}\n"
@@ -529,6 +530,7 @@ class NvidiaLLMProvider:
             "7. If the user answered that they have no specific preference (e.g. 'go according to yourself', 'any', 'whatever', 'no choice', 'any good one', 'no preference', 'up to you'), OR if they already responded in 'last_user_answer': DO NOT ask them again! Immediately proceed with the top popular/featured option on the page (e.g., click listing #1, play video #1, or navigate to top result).\n"
             "8. When searching for watches, electronics, or retail products, ONLY browse e-commerce platforms like eBay or Amazon! NEVER navigate to bookstore or unrelated sites like AbeBooks or Goodreads!\n"
             "9. If on YouTube or media sites and video results are listed, click the video title or play button to start playback.\n"
+            "10. When searching Google or search engines, ALWAYS prefer navigating directly to 'https://www.google.com/search?q=...' with your search query to get results immediately. If you type into a search box, use 'press_key' with 'Enter' to submit the query.\n"
         )
 
         # Streamline elements to minimal tokens so NVIDIA LLM responds quickly without timing out

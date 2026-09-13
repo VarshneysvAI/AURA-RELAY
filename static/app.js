@@ -594,11 +594,7 @@ function speakWithBrowser(text, onEndedCallback = null) {
     window.speechSynthesis.resume();
 
     // Clear orphaned active utterances
-    if (window._activeUtterances) {
-        window._activeUtterances = [];
-    } else {
-        window._activeUtterances = [];
-    }
+    window._activeUtterances = [];
 
     // Clean text: strip markdown tables, code blocks, URLs, and formatting
     let clean = text
@@ -617,60 +613,79 @@ function speakWithBrowser(text, onEndedCallback = null) {
         return;
     }
 
-    if (clean.length > 260) {
-        clean = clean.substring(0, 260) + '... Full details are in your chat.';
+    // Split into natural sentences so Chrome doesn't stall on long single utterances
+    const sentenceRegex = /[^.!?]+[.!?]+|[^.!?]+$/g;
+    const matched = clean.match(sentenceRegex) || [clean];
+    const chunks = matched.map(s => s.trim()).filter(Boolean);
+
+    if (chunks.length === 0) {
+        if (onEndedCallback) onEndedCallback();
+        return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(clean);
-    utterance.rate = 1.05;
-    utterance.pitch = 1.0;
-
-    if (lockedVoice) {
-        utterance.voice = lockedVoice;
-    } else if (window.speechSynthesis.getVoices().length > 0) {
-        const vs = window.speechSynthesis.getVoices();
-        utterance.voice = vs.find(v => v.lang && v.lang.startsWith('en')) || vs[0];
-    }
-
-    // Retain global reference to prevent Chrome garbage collector bug
-    window._activeUtterances.push(utterance);
-
+    let currentIndex = 0;
     let hasEnded = false;
     let resumeInterval = null;
 
-    const finishSpeech = () => {
+    const finishAll = () => {
         if (hasEnded) return;
         hasEnded = true;
         if (resumeInterval) clearInterval(resumeInterval);
-        
-        // Remove this utterance from global reference array
-        const idx = window._activeUtterances.indexOf(utterance);
-        if (idx > -1) window._activeUtterances.splice(idx, 1);
-
+        window._activeUtterances = [];
         if (onEndedCallback) onEndedCallback();
     };
 
-    utterance.onend = finishSpeech;
-    utterance.onerror = (e) => {
-        console.warn('TTS utterance notice:', e);
-        finishSpeech();
+    const speakNextChunk = () => {
+        if (hasEnded) return;
+        if (currentIndex >= chunks.length) {
+            finishAll();
+            return;
+        }
+
+        const chunkText = chunks[currentIndex++];
+        const utterance = new SpeechSynthesisUtterance(chunkText);
+        utterance.rate = 1.05;
+        utterance.pitch = 1.0;
+
+        if (lockedVoice) {
+            utterance.voice = lockedVoice;
+        } else if (window.speechSynthesis.getVoices().length > 0) {
+            const vs = window.speechSynthesis.getVoices();
+            utterance.voice = vs.find(v => v.lang && v.lang.startsWith('en')) || vs[0];
+        }
+
+        window._activeUtterances.push(utterance);
+
+        utterance.onend = () => {
+            speakNextChunk();
+        };
+        utterance.onerror = (e) => {
+            console.warn('TTS utterance notice:', e);
+            speakNextChunk();
+        };
+
+        window.speechSynthesis.speak(utterance);
+        window.speechSynthesis.resume();
     };
 
-    // Chromium timer bug workaround: resume every 3.5s while speech is ongoing
+    // Chromium timer bug workaround: keep speech engine alive while speaking
     resumeInterval = setInterval(() => {
         if (!hasEnded && window.speechSynthesis.speaking) {
             window.speechSynthesis.resume();
-        } else {
-            clearInterval(resumeInterval);
+        } else if (!hasEnded && currentIndex >= chunks.length && !window.speechSynthesis.speaking) {
+            finishAll();
         }
-    }, 3500);
+    }, 2500);
 
-    // Guaranteed fallback timeout so callback always runs
-    const fallbackTimeoutMs = Math.max(3000, clean.length * 95);
-    setTimeout(finishSpeech, fallbackTimeoutMs);
+    // Dynamic safety fallback timeout based on total text length
+    const fallbackTimeoutMs = Math.max(10000, clean.length * 130 + 5000);
+    setTimeout(() => {
+        if (!hasEnded && !window.speechSynthesis.speaking) {
+            finishAll();
+        }
+    }, fallbackTimeoutMs);
 
-    window.speechSynthesis.speak(utterance);
-    window.speechSynthesis.resume();
+    speakNextChunk();
 }
 
 function handleUserReplay(audioUrl, text) {
@@ -748,6 +763,37 @@ function initEventStream() {
 // =============================================================================
 
 let currentRenderedScreenshotUrl = '';
+let isLiveStreamActive = false;
+
+function activateLiveStream() {
+    const liveImg = document.getElementById('liveScreenshot');
+    const noPreview = document.getElementById('noPreview');
+    const streamUrl = '/api/browser/stream';
+
+    if (!liveImg) return;
+    if (isLiveStreamActive && liveImg.src && liveImg.src.includes('/api/browser/stream')) {
+        return;
+    }
+
+    isLiveStreamActive = true;
+    liveImg.onload = () => {
+        liveImg.style.display = 'block';
+        if (noPreview) noPreview.style.display = 'none';
+    };
+    liveImg.onerror = () => {
+        isLiveStreamActive = false;
+    };
+    liveImg.src = `${streamUrl}?t=${Date.now()}`;
+    liveImg.style.display = 'block';
+    if (noPreview) noPreview.style.display = 'none';
+}
+
+function deactivateLiveStream(lastScreenshotPath = null) {
+    isLiveStreamActive = false;
+    if (lastScreenshotPath) {
+        updateRenderedScreenshot(lastScreenshotPath, true);
+    }
+}
 
 function updateRenderedScreenshot(rawUrl, force = false) {
     const liveImg = document.getElementById('liveScreenshot');
@@ -905,14 +951,18 @@ function handleStateUpdate(data) {
         showHumanInTheLoopModal(state.question, state.question_id, state.question_audio_url);
     }
 
-    // Update screenshot preview with smooth double-buffering & zero flicker
-    if (state.screenshots && state.screenshots.length > 0) {
-        const latest = state.screenshots[state.screenshots.length - 1];
-        if (latest && latest.path) {
-            updateRenderedScreenshot(latest.path);
-        }
+    // Update live browser workspace: stream in real-time when active, fallback to double-buffered screenshot when idle
+    if (state.status === 'running' || state.status === 'paused') {
+        activateLiveStream();
     } else {
-        updateRenderedScreenshot(null);
+        const latest = (state.screenshots && state.screenshots.length > 0) ? state.screenshots[state.screenshots.length - 1].path : null;
+        if (isLiveStreamActive) {
+            deactivateLiveStream(latest);
+        } else if (latest) {
+            updateRenderedScreenshot(latest);
+        } else {
+            updateRenderedScreenshot(null);
+        }
     }
 
     // Render live timeline events (deduplicated in timeline container)
@@ -1260,7 +1310,7 @@ function openViewportModal() {
 
     if (!lightboxModal) return;
 
-    const currentSrc = currentRenderedScreenshotUrl || (liveImg ? liveImg.src : '');
+    const currentSrc = isLiveStreamActive ? '/api/browser/stream' : (currentRenderedScreenshotUrl || (liveImg ? liveImg.src : ''));
     if (currentSrc && !currentSrc.endsWith('/') && !currentSrc.includes('about:blank')) {
         if (lightboxImg) {
             lightboxImg.src = currentSrc;
