@@ -276,6 +276,7 @@ class DomIntelligence:
         
         for attempt in range(max_retries):
             try:
+                print(f"DEBUG: safe_click target='{target}', element_type='{element_type}'")
                 # Use Playwright's role-based locator with auto-wait
                 locator = self.page.get_by_role(element_type, name=target)
                 
@@ -322,10 +323,10 @@ class DomIntelligence:
             if not await element.is_visible():
                 return False
             
-            # Inject JavaScript to draw a glowing red box
+            # Inject JavaScript to draw a glowing red box with auto-cleanup after 800ms
             await element.evaluate("""
                 (el) => {
-                    // Store original styles for restoration if needed
+                    // Store original styles for restoration
                     el.setAttribute('data-original-outline', el.style.outline || '');
                     el.setAttribute('data-original-shadow', el.style.boxShadow || '');
                     
@@ -336,12 +337,21 @@ class DomIntelligence:
                     el.style.transition = 'all 0.2s ease-in-out';
                     el.style.zIndex = '9999';
                     el.style.position = 'relative';
+
+                    // Auto-cleanup after 800ms to eliminate permanent "Iron Man" stains
+                    setTimeout(() => {
+                        try {
+                            el.style.outline = el.getAttribute('data-original-outline') || '';
+                            el.style.boxShadow = el.getAttribute('data-original-shadow') || '';
+                            el.removeAttribute('data-original-outline');
+                            el.removeAttribute('data-original-shadow');
+                        } catch (e) {}
+                    }, 800);
                 }
             """)
             
             # Brief pause so the highlight is visible (for screenshots/demo)
-            await self.page.wait_for_timeout(400)
-            
+            await self.page.wait_for_timeout(350)
             return True
             
         except Exception as e:
@@ -354,17 +364,21 @@ class DomIntelligence:
         Try multiple selectors in order of preference until one succeeds.
         Uses safe_click for each attempt to get retry logic and Iron Man vision.
         """
+        import re
         for selector in selectors:
-            # Extract text from selector for safe_click
-            # Handles formats like "text=Download Tax Document", "button:has-text('Sign in')"
-            import re
-            match = re.search(r"text[=:](['\"]?)([^'\"]+)\1", selector)
-            if match:
-                target_text = match.group(2)
-            elif selector.startswith('"') or selector.startswith("'"):
-                target_text = selector.strip("\"'")
+            # Extract clean text from selectors:
+            # Handles formats like "button:has-text('Sign in')", "text=Download", "'Sign in'"
+            has_text_match = re.search(r":has-text\((['\"]?)(.*?)\1\)", selector)
+            if has_text_match:
+                target_text = has_text_match.group(2)
             else:
-                target_text = selector
+                match = re.search(r"text[=:](['\"]?)([^'\"]+)\1", selector)
+                if match:
+                    target_text = match.group(2)
+                elif selector.startswith('"') or selector.startswith("'"):
+                    target_text = selector.strip("\"'")
+                else:
+                    target_text = selector
             
             # Try safe_click with the extracted text
             if await self.safe_click(target_text, "button", max_retries=max_retries):
@@ -373,12 +387,179 @@ class DomIntelligence:
         return False
     
     async def get_page_hash(self) -> str:
-        """Get a hash representing current page state for circuit breaker."""
+        """Get a stable semantic hash representing current page state for circuit breaker."""
         try:
-            title = await self.page.title()
-            url = self.page.url
-            content = await self.page.content()
-            # Simple hash based on title, URL, and content length
-            return f"{title}:{url}:{len(content)}"
+            import urllib.parse
+            import hashlib
+            title = (await self.page.title()) or ""
+            raw_url = self.page.url or ""
+            parsed_url = urllib.parse.urlparse(raw_url)
+            norm_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+            
+            # Stable content text: inspect primary headers & body text without length volatility
+            text_snippet = await self.page.evaluate("""
+                () => {
+                    const h = document.querySelector('h1, h2')?.textContent || '';
+                    const main = document.querySelector('main, #content, article')?.textContent || document.body?.textContent || '';
+                    return (h + ' ' + main).replace(/\\s+/g, ' ').trim().slice(0, 300);
+                }
+            """)
+            raw_key = f"{title}:{norm_url}:{text_snippet}"
+            return hashlib.md5(raw_key.encode("utf-8")).hexdigest()[:16]
         except Exception:
             return "unknown"
+
+    async def extract_listings(self) -> List[Dict[str, Any]]:
+        """
+        Intelligently extracts product listings, prices, titles, ratings, and links
+        from the current page (YouTube, eBay, Amazon, Google, web stores).
+        """
+        try:
+            listings = await self.page.evaluate("""
+                () => {
+                    const results = [];
+                    const host = window.location.hostname || '';
+
+                    // 1. YouTube Video Results
+                    if (host.includes('youtube.com')) {
+                        const ytItems = document.querySelectorAll('ytd-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer');
+                        for (const item of ytItems) {
+                            try {
+                                const titleEl = item.querySelector('#video-title, #video-title-link, a#thumbnail');
+                                const linkEl = item.querySelector('a#video-title, a#thumbnail, a[href*="/watch"]');
+                                const metaEls = item.querySelectorAll('#metadata-line span, span.badge-shape-wiz__text');
+                                const channelEl = item.querySelector('#channel-name, ytd-channel-name');
+                                
+                                const rawTitle = titleEl ? (titleEl.innerText || titleEl.getAttribute('title') || '') : '';
+                                const title = rawTitle.split('\\n')[0].trim();
+                                const url = linkEl ? linkEl.href : '';
+                                const meta = Array.from(metaEls).map(e => e.innerText.trim()).filter(Boolean).join(' • ');
+                                const channel = channelEl ? channelEl.innerText.trim() : '';
+                                
+                                if (title && url && url.includes('/watch') && !results.some(r => r.url === url)) {
+                                    results.push({
+                                        title: title,
+                                        price: channel ? `${channel}${meta ? ' • ' + meta : ''}` : (meta || 'YouTube Video'),
+                                        url: url,
+                                        source: 'YouTube'
+                                    });
+                                }
+                                if (results.length >= 8) break;
+                            } catch (e) {}
+                        }
+                    }
+                    
+                    // 2. eBay selectors
+                    if (results.length === 0) {
+                        const ebayItems = document.querySelectorAll('li.s-item, .s-card, .s-item__wrapper');
+                        if (ebayItems.length > 0) {
+                            for (const item of ebayItems) {
+                                try {
+                                    const titleEl = item.querySelector('.s-item__title, .s-item__title span, [role="heading"]');
+                                    const priceEl = item.querySelector('.s-item__price');
+                                    const linkEl = item.querySelector('a.s-item__link, a[href*="/itm/"]');
+                                    const shippingEl = item.querySelector('.s-item__shipping, .s-item__logisticsCost');
+                                    
+                                    const title = titleEl ? titleEl.innerText.trim() : '';
+                                    const price = priceEl ? priceEl.innerText.trim() : '';
+                                    const url = linkEl ? linkEl.href : '';
+                                    const shipping = shippingEl ? shippingEl.innerText.trim() : '';
+                                    
+                                    if (title && !title.toLowerCase().includes('shop on ebay') && price) {
+                                        results.push({
+                                            title: title,
+                                            price: price,
+                                            url: url,
+                                            shipping: shipping,
+                                            source: 'eBay'
+                                        });
+                                    }
+                                    if (results.length >= 8) break;
+                                } catch (e) {}
+                            }
+                        }
+                    }
+                    
+                    // 3. Amazon selectors (if eBay yielded nothing)
+                    if (results.length === 0) {
+                        const amzItems = document.querySelectorAll('div[data-component-type="s-search-result"]');
+                        for (const item of amzItems) {
+                            try {
+                                const titleEl = item.querySelector('h2 a span, h2 span, [data-cy="title-recipe"] h2');
+                                const priceEl = item.querySelector('.a-price .a-offscreen, .a-price');
+                                const linkEl = item.querySelector('h2 a');
+                                
+                                const title = titleEl ? titleEl.innerText.trim() : '';
+                                const price = priceEl ? priceEl.innerText.trim() : '';
+                                const url = linkEl ? linkEl.href : '';
+                                
+                                if (title && price) {
+                                    results.push({
+                                        title: title,
+                                        price: price,
+                                        url: url,
+                                        source: 'Amazon'
+                                    });
+                                }
+                                if (results.length >= 8) break;
+                            } catch (e) {}
+                        }
+                    }
+
+                    // 4. Search engine results (Google, Bing, DuckDuckGo)
+                    if (results.length === 0 && (host.includes('google.') || host.includes('bing.') || host.includes('duckduckgo.'))) {
+                        const searchItems = document.querySelectorAll('div.g, div[data-sokoban-container], li.b_algo');
+                        for (const item of searchItems) {
+                            try {
+                                const titleEl = item.querySelector('h3');
+                                const linkEl = item.querySelector('a[href^="http"]');
+                                const snippetEl = item.querySelector('div[style*="-webkit-line-clamp"], .VwiC3b, .b_caption p');
+                                const title = titleEl ? titleEl.innerText.trim() : '';
+                                const url = linkEl ? linkEl.href : '';
+                                const snippet = snippetEl ? snippetEl.innerText.trim() : '';
+                                if (title && url && !url.includes('google.com/search') && !results.some(r => r.url === url)) {
+                                    results.push({
+                                        title: title,
+                                        price: snippet ? snippet.slice(0, 80) : 'Web Result',
+                                        url: url,
+                                        source: 'Search'
+                                    });
+                                }
+                                if (results.length >= 8) break;
+                            } catch (e) {}
+                        }
+                    }
+                    
+                    // 5. Generic fallback for shopping/catalog pages
+                    if (results.length === 0) {
+                        const cards = document.querySelectorAll('[class*="product"], [class*="item"], [class*="card"]');
+                        for (const card of cards) {
+                            try {
+                                const text = card.innerText || '';
+                                const priceMatch = text.match(/\\$[0-9]+(?:\\.[0-9]{2})?/);
+                                if (priceMatch) {
+                                    const link = card.querySelector('a[href]');
+                                    const heading = card.querySelector('h2, h3, h4, [class*="title"]') || card;
+                                    const titleText = heading ? (heading.innerText || '').split('\\n')[0].trim() : '';
+                                    if (titleText && titleText.length > 5 && titleText.length < 120) {
+                                        results.push({
+                                            title: titleText,
+                                            price: priceMatch[0],
+                                            url: link ? link.href : '',
+                                            source: 'Web Store'
+                                        });
+                                    }
+                                }
+                                if (results.length >= 8) break;
+                            } catch (e) {}
+                        }
+                    }
+                    
+                    return results;
+                }
+            """)
+            return listings or []
+        except Exception as e:
+            print(f"Error extracting listings: {e}")
+            return []
+

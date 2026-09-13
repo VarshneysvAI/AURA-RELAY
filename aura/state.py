@@ -3,7 +3,7 @@ AURA Relay State Manager - Thread-safe application state
 """
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -55,6 +55,7 @@ class AppState:
     screenshots: List[Screenshot] = field(default_factory=list)
     question: Optional[str] = None
     question_id: Optional[int] = None
+    question_audio_url: Optional[str] = None
     result: Optional[str] = None
     error_message: Optional[str] = None
     started_at: Optional[str] = None
@@ -69,6 +70,12 @@ class StateManager:
         self._lock = threading.RLock()
         self._subscribers: List[Callable[[AppState], None]] = []
         self._question_counter = 0
+
+    def reset(self) -> None:
+        """Reset state back to initial idle condition."""
+        with self._lock:
+            self._state = AppState()
+        self._notify_subscribers()
     
     def subscribe(self, callback: Callable[[AppState], None]) -> None:
         """Subscribe to state changes."""
@@ -107,7 +114,7 @@ class StateManager:
         with self._lock:
             self._state.status = status
             if status == "done" and not self._state.completed_at:
-                self._state.completed_at = datetime.utcnow().isoformat() + "Z"
+                self._state.completed_at = datetime.now(timezone.utc).isoformat()
         self._notify_subscribers()
     
     def set_instruction(self, instruction: str) -> None:
@@ -141,7 +148,7 @@ class StateManager:
         """Add an event to the timeline."""
         with self._lock:
             event = Event(
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 event_type=event_type,
                 message=message,
                 details=details
@@ -155,7 +162,7 @@ class StateManager:
         with self._lock:
             screenshot = Screenshot(
                 filename=filename,
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 step=step,
                 path=path
             )
@@ -163,12 +170,13 @@ class StateManager:
         self._notify_subscribers()
         return screenshot
     
-    def ask_question(self, question: str) -> int:
+    def ask_question(self, question: str, audio_url: Optional[str] = None) -> int:
         """Ask the user a question and return question ID."""
         with self._lock:
             self._question_counter += 1
             self._state.question = question
             self._state.question_id = self._question_counter
+            self._state.question_audio_url = audio_url
             self._state.status = "paused"
         self._notify_subscribers()
         return self._state.question_id
@@ -180,7 +188,9 @@ class StateManager:
                 return False
             self._state.question = None
             self._state.question_id = None
-            self._state.status = "running"
+            self._state.question_audio_url = None
+            if self._state.status not in ("done", "stopped", "error"):
+                self._state.status = "running"
             self.add_event("user_answer_received", f"User answered: {answer}")
         self._notify_subscribers()
         return True
@@ -191,7 +201,7 @@ class StateManager:
             self._state.result = result
             self._state.status = "done"
             if not self._state.completed_at:
-                self._state.completed_at = datetime.utcnow().isoformat() + "Z"
+                self._state.completed_at = datetime.now(timezone.utc).isoformat()
         self._notify_subscribers()
     
     def set_error(self, error_message: str) -> None:
@@ -199,7 +209,7 @@ class StateManager:
         with self._lock:
             self._state.error_message = error_message
             self._state.status = "error"
-            self._state.completed_at = datetime.utcnow().isoformat() + "Z"
+            self._state.completed_at = datetime.now(timezone.utc).isoformat()
         self._notify_subscribers()
     
     def start_execution(self, instruction: str) -> None:
@@ -207,11 +217,14 @@ class StateManager:
         with self._lock:
             self._state.status = "running"
             self._state.instruction = instruction
-            self._state.started_at = datetime.utcnow().isoformat() + "Z"
+            self._state.started_at = datetime.now(timezone.utc).isoformat()
             self._state.events.clear()
             self._state.screenshots.clear()
             self._state.result = None
             self._state.error_message = None
+            self._state.question = None
+            self._state.question_id = None
+            self._state.question_audio_url = None
         self._notify_subscribers()
     
     def stop_execution(self) -> None:
@@ -219,7 +232,7 @@ class StateManager:
         with self._lock:
             if self._state.status in ("running", "paused"):
                 self._state.status = "stopped"
-                self._state.completed_at = datetime.utcnow().isoformat() + "Z"
+                self._state.completed_at = datetime.now(timezone.utc).isoformat()
         self._notify_subscribers()
     
     def clear(self) -> None:
@@ -243,6 +256,7 @@ class StateManager:
                 "screenshots": [s.to_dict() for s in self._state.screenshots],
                 "question": self._state.question,
                 "question_id": self._state.question_id,
+                "question_audio_url": self._state.question_audio_url,
                 "result": self._state.result,
                 "error_message": self._state.error_message,
                 "started_at": self._state.started_at,

@@ -17,6 +17,12 @@ class Email:
     timestamp: str
     otp_code: Optional[str] = None
     
+    def get(self, key: str, default = None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
     def to_dict(self) -> dict:
         return {
             "sender": self.sender,
@@ -61,14 +67,15 @@ class LocalEmailProvider(EmailProvider):
         with self._lock:
             self._emails.append(email)
     
-    def wait_for_email(self, since_timestamp: str, timeout_seconds: int = 30) -> Optional[Email]:
+    def wait_for_email(self, since_timestamp = None, timeout_seconds: int = 30) -> Optional[Email]:
         """Wait for a new email."""
         start_time = time.time()
+        since_str = since_timestamp.isoformat() + "Z" if isinstance(since_timestamp, datetime) else str(since_timestamp or "")
         
         while time.time() - start_time < timeout_seconds:
             with self._lock:
                 for email in self._emails:
-                    if email.timestamp > since_timestamp:
+                    if not since_str or email.timestamp >= since_str:
                         return email
             
             time.sleep(0.5)
@@ -128,12 +135,13 @@ class ImapEmailProvider(EmailProvider):
         except Exception as e:
             raise RuntimeError(f"Failed to connect to IMAP server: {e}")
     
-    def wait_for_email(self, since_timestamp: str, timeout_seconds: int = 30) -> Optional[Email]:
+    def wait_for_email(self, since_timestamp = None, timeout_seconds: int = 30) -> Optional[Email]:
         """Wait for a new email via IMAP."""
         if not self._connected:
             self._connect()
         
         start_time = time.time()
+        since_str = since_timestamp.isoformat() + "Z" if isinstance(since_timestamp, datetime) else str(since_timestamp or "")
         
         while time.time() - start_time < timeout_seconds:
             try:
@@ -141,7 +149,7 @@ class ImapEmailProvider(EmailProvider):
                 if emails:
                     # Find email newer than since_timestamp
                     for email in reversed(emails):
-                        if email.timestamp > since_timestamp:
+                        if not since_str or email.timestamp >= since_str:
                             return email
             except Exception:
                 pass
@@ -160,16 +168,77 @@ class ImapEmailProvider(EmailProvider):
             _, message_ids = self._mail.search(None, 'ALL')
             ids = message_ids[0].split()
             
+            import email
+            from email.header import decode_header
+            from aura.otp import extract_otp
+            
             for msg_id in ids[-10:]:  # Last 10 emails
                 _, msg_data = self._mail.fetch(msg_id, '(RFC822)')
-                # Parse email (simplified)
-                raw_email = msg_data[0][1]
-                # In production, use email.parser here
+                if not msg_data or not msg_data[0]:
+                    continue
+                raw_bytes = msg_data[0][1]
+                msg = email.message_from_bytes(raw_bytes)
+                
+                # Decode subject
+                raw_subject = msg.get("Subject", "")
+                subject_parts = decode_header(raw_subject)
+                subject = ""
+                for part, encoding in subject_parts:
+                    if isinstance(part, bytes):
+                        subject += part.decode(encoding or "utf-8", errors="ignore")
+                    else:
+                        subject += str(part)
+                
+                # Decode sender
+                raw_from = msg.get("From", "")
+                from_parts = decode_header(raw_from)
+                sender = ""
+                for part, encoding in from_parts:
+                    if isinstance(part, bytes):
+                        sender += part.decode(encoding or "utf-8", errors="ignore")
+                    else:
+                        sender += str(part)
+                
+                # Extract body
+                body = ""
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        content_type = part.get_content_type()
+                        content_disposition = str(part.get("Content-Disposition"))
+                        if "attachment" not in content_disposition:
+                            if content_type == "text/plain":
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+                                    break
+                            elif content_type == "text/html" and not body:
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+                else:
+                    payload = msg.get_payload(decode=True)
+                    if payload:
+                        body = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+                    else:
+                        body = msg.get_payload() or ""
+                
+                import email.utils
+                raw_date = msg.get("Date")
+                if raw_date:
+                    try:
+                        dt = email.utils.parsedate_to_datetime(raw_date)
+                        date_str = dt.isoformat()
+                    except Exception:
+                        date_str = datetime.utcnow().isoformat() + "Z"
+                else:
+                    date_str = datetime.utcnow().isoformat() + "Z"
+                
                 emails.append(Email(
-                    sender="unknown",
-                    subject="unknown",
-                    body=raw_email.decode('utf-8', errors='ignore'),
-                    timestamp=datetime.utcnow().isoformat() + "Z"
+                    sender=sender or "unknown",
+                    subject=subject or "(no subject)",
+                    body=body,
+                    timestamp=date_str,
+                    otp_code=otp_code
                 ))
         except Exception as e:
             raise RuntimeError(f"Failed to fetch emails: {e}")

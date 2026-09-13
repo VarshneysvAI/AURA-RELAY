@@ -40,6 +40,14 @@ class Config(BaseModel):
     
     openai_api_key: Optional[str] = Field(default=None)
     anakin_api_key: Optional[str] = Field(default=None)
+    anakin_base_url: str = Field(default="https://api.anakin.io/v1")
+    
+    nvidia_llm_api_key: Optional[str] = Field(default=None)
+    nvidia_llm_model: str = Field(default="openai/gpt-oss-20b")
+    nvidia_llm_base_url: str = Field(default="https://integrate.api.nvidia.com/v1")
+    nvidia_tts_api_key: Optional[str] = Field(default=None)
+    nvidia_tts_voice: str = Field(default="Magpie-Multilingual.EN-US.Aria")
+    nvidia_tts_base_url: str = Field(default="https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com/v1/audio/synthesize")
     
     @property
     def is_sandbox(self) -> bool:
@@ -51,7 +59,12 @@ class Config(BaseModel):
     
     @classmethod
     def load(cls) -> "Config":
-        """Load configuration from environment variables."""
+        """Load configuration from environment variables and .env file."""
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(override=True)
+        except Exception:
+            pass
         return cls(
             mode=os.getenv("MODE", "sandbox"),
             app_host=os.getenv("APP_HOST", "127.0.0.1"),
@@ -78,6 +91,13 @@ class Config(BaseModel):
             email_subject_filter=os.getenv("EMAIL_SUBJECT_FILTER") or None,
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             anakin_api_key=os.getenv("ANAKIN_API_KEY") or None,
+            anakin_base_url=os.getenv("ANAKIN_BASE_URL", "https://api.anakin.io/v1"),
+            nvidia_llm_api_key=os.getenv("NVIDIA_LLM_API_KEY") or None,
+            nvidia_llm_model=os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"),
+            nvidia_llm_base_url=os.getenv("NVIDIA_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+            nvidia_tts_api_key=os.getenv("NVIDIA_TTS_API_KEY") or None,
+            nvidia_tts_voice=os.getenv("NVIDIA_TTS_VOICE", "Magpie-Multilingual.EN-US.Aria"),
+            nvidia_tts_base_url=os.getenv("NVIDIA_TTS_BASE_URL", "https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com/v1/audio/synthesize"),
         )
 
 

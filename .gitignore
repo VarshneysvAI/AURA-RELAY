@@ -34,11 +34,7 @@ ENV/
 *~
 
 # Runtime data
-runtime/screenshots/*.png
-runtime/events.jsonl
-runtime/browser_session/
-*.log
-server.log
+runtime/
 
 # Environment variables
 .env
@@ -54,5 +50,12 @@ Thumbs.db
 htmlcov/
 .tox/
 
+# Scratch & Logs
+*.log
+scratch/
+.system_generated/
+test_query.py
+
 # Docker
 docker-compose.override.yml
+.skills/

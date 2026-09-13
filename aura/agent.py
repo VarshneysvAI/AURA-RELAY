@@ -1,50 +1,58 @@
 """
 AURA Relay Agent - Persistent execution orchestrator
 
-CRITICAL ARCHITECTURAL FIX:
-This version uses a SINGLE PERSISTENT event loop and background thread.
-Playwright objects (Browser, Context, Page) are bound to this loop.
-When a task finishes, the browser stays ALIVE for the next task.
-This enables true session persistence (cookies, logins, history).
+Runs on a single dedicated background thread with its own persistent event loop.
+Browser and Playwright objects stay alive across tasks for true session persistence.
 """
 import asyncio
+import re
 import threading
-from datetime import datetime
-from typing import Optional
+import urllib.parse
+import time
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List
 
 from .browser_manager import BrowserManager
 from .dom_intelligence import DomIntelligence
 from .otp import extract_otp, mask_otp
+from .anakin_client import get_anakin_client
+from .llm_provider import get_llm_provider
+from .query_cleaner import clean_search_query, build_search_url
 
 
 class AgentExecutor:
     """
     Persistent Agent Executor.
-    
-    Runs on a single dedicated background thread with its own event loop.
-    This ensures the browser context remains alive across multiple tasks,
-    enabling true session persistence (cookies, logins, history).
+    Runs on a dedicated background thread with its own persistent event loop.
     """
-    
     def __init__(self, state_manager, email_provider, config, security_manager):
         self.state = state_manager
         self.email_provider = email_provider
         self.config = config
         self.security_manager = security_manager
+        self.anakin = get_anakin_client()
+        self.llm = get_llm_provider()
         
         # Initialize browser manager (lazy launch)
         self.browser = BrowserManager(
             headless=config.headless,
             slow_mo=config.slow_mo
         )
-        self.dom = DomIntelligence(self.browser, self.state)
+        self.dom = None # Initialized after browser launch
         
         self._stop_requested = False
+        self._pause_requested = False
         self._last_user_answer = ""
+        self._gathered_info = {}
         
-        # CRITICAL FIX: Single persistent event loop for Playwright
-        # This prevents the "event loop closed" crash on subsequent runs
+        # Single persistent event loop for Playwright
         self.loop = asyncio.new_event_loop()
+        def _proactor_handler(lp, ctx):
+            exc = ctx.get("exception")
+            if isinstance(exc, ConnectionResetError) or (isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10054):
+                return
+            lp.default_exception_handler(ctx)
+        self.loop.set_exception_handler(_proactor_handler)
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
         
@@ -59,52 +67,94 @@ class AgentExecutor:
     def is_running(self) -> bool:
         return self._current_task_future is not None and not self._current_task_future.done()
 
-    def start(self, instruction: str) -> bool:
+    def start(self, instruction: str, gathered_info: Optional[dict] = None) -> bool:
         if self.is_running():
             return False
             
-        self.state.set_status("running")
-        self.state.clear_events() 
+        self.state.start_execution(instruction)
         self._stop_requested = False
+        self._pause_requested = False
         self._question_resolved.clear()
+        self._gathered_info = gathered_info or {}
         
-        # Schedule the run method on the persistent loop
-        coro = self.run(instruction)
+        coro = self.run(instruction, self._gathered_info)
         self._current_task_future = asyncio.run_coroutine_threadsafe(coro, self.loop)
         return True
 
     def stop(self):
         self._stop_requested = True
+        self._pause_requested = False
         self.state.stop_execution()
         if self._current_task_future and not self._current_task_future.done():
             self._current_task_future.cancel()
 
-    def submit_answer(self, answer: str, question_id: int) -> bool:
-        success = self.state.answer_question(answer, question_id)
-        if success:
-            self._last_user_answer = answer
-            self.state.add_event("user_answer_received", f"User answered: {answer}")
-            self._question_resolved.set()  # Signal resume
-        return success
+    def pause(self):
+        self._pause_requested = True
+        self.state.set_status("paused")
+        self.state.add_event("warning", "Agent paused for human takeover. Interact with browser window, then click Resume.")
+        try:
+            if hasattr(self, 'browser') and self.browser:
+                asyncio.run_coroutine_threadsafe(self.browser.bring_to_front(), self.loop)
+                asyncio.run_coroutine_threadsafe(
+                    self._capture_and_record_screenshot("pause_takeover.png", "Human Takeover Active"),
+                    self.loop
+                )
+        except Exception:
+            pass
 
-    async def run(self, instruction: str):
+    def resume(self):
+        self._pause_requested = False
+        self.state.set_status("running")
+        self.state.add_event("action_succeeded", "Agent resumed execution from human takeover.")
+        try:
+            if hasattr(self, 'browser') and self.browser:
+                asyncio.run_coroutine_threadsafe(
+                    self._capture_and_record_screenshot("resume_autonomous.png", "Autonomous Resumed"),
+                    self.loop
+                )
+        except Exception:
+            pass
+
+    def submit_answer(self, answer: str, question_id: int) -> bool:
+        self.state.answer_question(answer, question_id)
+        self._last_user_answer = answer
+        self._question_resolved.set()
+        return True
+
+    async def run(self, instruction: str, gathered_info: Optional[dict] = None):
         self._stop_requested = False
+        self._pause_requested = False
         self.state.set_status("running")
         self.state.add_event("plan_created", f"Starting task: {instruction}")
         
         try:
             # Ensure browser is launched (persistent across runs)
             await self.browser.ensure_launched()
+            self.dom = DomIntelligence(self.browser.page)
             
-            # Execute the secure portal retrieval flow
-            await self._execute_secure_portal_flow(instruction)
+            # Determine flow type: Portal / Sandbox or Arbitrary Web Task
+            is_portal_flow = any(
+                term in instruction.lower()
+                for term in ["sandbox", "portal", "tax document", "statement", "2024 tax", "login"]
+            ) and ("ebay" not in instruction.lower() and "amazon" not in instruction.lower() and "shop" not in instruction.lower())
+            
+            if is_portal_flow:
+                await self._execute_secure_portal_flow(instruction)
+            else:
+                await self._execute_web_coworker_flow(instruction, gathered_info or {})
             
             # Finalize
             if not self._stop_requested:
                 self.state.set_current_step("Completed", "Task finished successfully")
-                self.state.add_event("completed", "Task completed successfully")
-                result = f"Successfully retrieved document. OTP verification completed."
-                self.state.set_result(result)
+                current_result = self.state.get_state().result
+                if not current_result:
+                    current_result = await self.llm.summarize_task(instruction, [], gathered_info or {})
+                    self.state.set_result(current_result)
+                
+                # Only add completed event if not already emitted
+                events = self.state.get_state().events
+                if not (events and events[-1].event_type == "completed"):
+                    self.state.add_event("completed", current_result)
                 self.state.set_status("done")
             
         except asyncio.CancelledError:
@@ -117,173 +167,518 @@ class AgentExecutor:
             self.state.add_event("error", f"Task failed: {error_msg}")
             import traceback
             traceback.print_exc()
-        # NOTE: We do NOT close the browser here to maintain persistence
+
+    async def _capture_and_record_screenshot(self, name: str, step_label: str = "") -> str:
+        """Capture screenshot and register it with StateManager for live UI inspection."""
+        filename = await self.browser.screenshot(name)
+        if filename:
+            step = step_label or self.state.get_state().current_step or "Execution"
+            self.state.add_screenshot(filename, step, f"/screenshots/{filename}")
+        return filename
+
+    async def _execute_web_coworker_flow(self, instruction: str, gathered_info: dict):
+        """
+        Executes arbitrary web browsing / e-commerce tasks using Anakin.io intelligence
+        and the NVIDIA ReAct decision loop.
+        """
+        # 1. Clean and optimize search query
+        clean_info = clean_search_query(instruction)
+        optimized_query = gathered_info.get("optimized_query")
+        clean_keywords = optimized_query or gathered_info.get("clean_keywords") or clean_info["keywords"]
+        clean_query = optimized_query or clean_info["anakin_query"]
+        max_price = gathered_info.get("max_price") or clean_info["max_price"]
+
+        gathered_info["optimized_query"] = clean_keywords
+        gathered_info["clean_keywords"] = clean_keywords
+        gathered_info["max_price"] = max_price
+
+        # 2. Check if target URL and web intelligence were already resolved upfront
+        target_url = gathered_info.get("target_url")
+        search_results = None
+        
+        if not target_url and self.anakin.is_configured():
+            self.state.set_current_step("Web Intelligence", "Consulting Anakin.io web search")
+            self.state.add_event("anakin_query", f"Querying Anakin web intelligence for: '{clean_query}'")
+            search_results = await self.anakin.search(clean_query, limit=3)
+            
+            if search_results and "results" in search_results:
+                results = search_results.get("results", [])
+                if results:
+                    intel_summary = "\n".join(
+                        [f"- {r.get('title', '')}: {r.get('snippet', '')[:140]}" for r in results[:3]]
+                    )
+                    self.state.add_event("anakin_intel_found", f"Discovered {len(results)} live web sources via Anakin.io")
+                    gathered_info["web_intelligence"] = intel_summary
+        
+        # 2. Determine starting target URL:
+        # If user gave explicit URL, navigate there.
+        # If platform is specific store/site (eBay, Wikipedia, YouTube), go there directly.
+        # If Anakin discovered live verified sources for user's research, navigate directly to top source!
+        # Only fallback to search engine if no direct source was found.
+        target_url = gathered_info.get("target_url")
+        if not target_url:
+            url_match = re.search(r"https?://[^\s]+", instruction)
+            if url_match:
+                target_url = url_match.group(0)
+            elif search_results and search_results.get("results") and search_results["results"][0].get("url", "").startswith("http"):
+                target_url = search_results["results"][0]["url"]
+                self.state.add_event("direct_source_selected", f"Navigating to primary source from Anakin: {target_url}")
+            else:
+                target_url = build_search_url(clean_info.get("platform", "google"), clean_keywords, max_price)
+                
+        gathered_info["target_url"] = target_url
+        self.state.set_current_step("Navigating", f"Opening {target_url}")
+        await self.browser.navigate(target_url)
+        self.state.add_event("page_opened", f"Navigated to {target_url}")
+        await self._capture_and_record_screenshot("web_start.png", "Navigated to target site")
+        
+        action_history = []
+        max_iterations = 12
+        
+        for iteration in range(max_iterations):
+            if self._stop_requested:
+                break
+                
+            was_paused = False
+            while self._pause_requested:
+                was_paused = True
+                await asyncio.sleep(1)
+                if self._stop_requested:
+                    break
+            
+            if self._stop_requested:
+                break
+
+            # If execution just resumed from human takeover, log the event and capture the new viewport
+            if was_paused:
+                try:
+                    current_takeover_url = self.browser.page.url
+                    self.state.add_event("action_succeeded", f"Resumed execution from human takeover at {current_takeover_url}")
+                    await self._capture_and_record_screenshot(f"step_{iteration}_takeover_resumed.png", "Human Takeover Resumed")
+                except Exception as e:
+                    self.state.add_event("warning", f"Could not capture state after human takeover: {e}")
+
+            # Observe DOM
+            url = self.browser.page.url
+            title = await self.browser.get_title()
+            
+            # Extract prominent visible interactive elements and page content summary
+            page_info = await self.browser.page.evaluate("""
+                () => {
+                    const items = [];
+                    const tags = document.querySelectorAll('input, button, a[href], [role="button"], [role="link"], select, textarea, div.price, span.price, div[data-component-type="s-search-result"]');
+                    for (const el of tags) {
+                        if (el.offsetParent !== null) { // visible
+                            const text = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || '').trim();
+                            if (text && text.length < 80) {
+                                items.push({
+                                    tag: el.tagName.toLowerCase(),
+                                    id: el.id || '',
+                                    text: text,
+                                    type: el.type || '',
+                                    placeholder: el.placeholder || ''
+                                });
+                            }
+                        }
+                        if (items.length >= 35) break;
+                    }
+                    const heading = document.querySelector('h1, h2')?.textContent || '';
+                    const snippets = Array.from(document.querySelectorAll('p, article, .s-result-item')).map(e => (e.textContent || '').trim()).filter(Boolean).join(' | ').slice(0, 500);
+                    return { elements: items, page_summary: (heading + ': ' + snippets).trim() };
+                }
+            """)
+            elements = page_info.get("elements", [])
+            if page_info.get("page_summary"):
+                summary_key = f"page_summary_step_{iteration}"
+                gathered_info[summary_key] = page_info["page_summary"]
+                action_history.append(f"page_scanned: found {len(elements)} elements, summary '{page_info['page_summary'][:50]}...'")
+            
+            # Extract structured product cards / listings on search & shopping pages
+            listings = await self.dom.extract_listings()
+            if listings:
+                prev_len = len(gathered_info.get("listings", []))
+                gathered_info["listings"] = listings
+                if prev_len == 0 or iteration % 2 == 0:
+                    self.state.add_event("action_succeeded", f"Identified {len(listings)} options on page")
+
+            inst_lower = instruction.lower()
+            clean_term = clean_keywords
+            if iteration == 0 and ("wikipedia.org" in url or "google.com" in url) and not gathered_info.get("last_user_answer"):
+                if "wikipedia" in inst_lower and len(clean_term) <= 2:
+                    decision = {
+                        "action": "ask_user",
+                        "value": "I have opened Wikipedia for you. What topic or article would you like me to look up?",
+                        "reasoning": "Need user's topic choice to search Wikipedia",
+                        "confidence": 0.95
+                    }
+                else:
+                    self.state.set_current_step(f"Reasoning ({iteration+1}/{max_iterations})", "Analyzing page state")
+                    decision = await self.llm.decide_action(
+                        goal=instruction,
+                        current_url=url,
+                        page_title=title,
+                        interactive_elements=elements,
+                        action_history=action_history,
+                        gathered_info=gathered_info,
+                    )
+            else:
+                self.state.set_current_step(f"Reasoning ({iteration+1}/{max_iterations})", "Analyzing page state")
+                decision = await self.llm.decide_action(
+                    goal=instruction,
+                    current_url=url,
+                    page_title=title,
+                    interactive_elements=elements,
+                    action_history=action_history,
+                    gathered_info=gathered_info,
+                )
+            
+            action_type = decision.get("action", "done")
+            target = decision.get("target", "")
+            value = decision.get("value", "")
+            confidence = decision.get("confidence", 1.0)
+            reasoning = decision.get("reasoning", "")
+            
+            self.state.add_event("agent_thought", f"Decision: {action_type.upper()} ({reasoning[:80]})")
+            action_history.append(f"{action_type}: {target or value}")
+            
+            if action_type == "done":
+                # Guard against premature completion on 404 / missing article pages
+                page_text_sample = ""
+                try:
+                    page_text_sample = await self.browser.page.evaluate("() => (document.body?.innerText || '').slice(0, 5000)")
+                except Exception:
+                    pass
+                
+                is_missing_page = any(
+                    err_phrase in page_text_sample.lower()
+                    for err_phrase in [
+                        "does not have an article with this exact name",
+                        "does not exist",
+                        "page not found",
+                        "no results found",
+                        "no exact match found",
+                        "404 not found"
+                    ]
+                )
+                
+                if is_missing_page and iteration < max_iterations - 1:
+                    self.state.add_event("warning", "Page indicates topic does not exist directly. Refusing premature completion and searching...")
+                    current_url = self.browser.page.url
+                    if "wikipedia.org" in current_url:
+                        wiki_search = f"https://en.wikipedia.org/w/index.php?search={urllib.parse.quote(clean_keywords)}"
+                        await self.browser.navigate(wiki_search)
+                        await asyncio.sleep(0.4)
+                        await self._capture_and_record_screenshot(f"step_{iteration}_wiki_search.png", "Searched Wikipedia")
+                        continue
+                    else:
+                        searched = False
+                        search_links = ["Search for", "search in existing articles", "Special:Search"]
+                        for sl in search_links:
+                            if await self.dom.click_element(sl, "a"):
+                                searched = True
+                                await asyncio.sleep(0.4)
+                                break
+                        if not searched:
+                            await self.dom.fill_input("search", clean_keywords)
+                            await self.browser.page.keyboard.press("Enter")
+                            await asyncio.sleep(0.4)
+                        await self._capture_and_record_screenshot(f"step_{iteration}_search_recovery.png", "Searched related articles")
+                        continue
+
+                final_summary = value
+                if not final_summary or "Explored findings for" in final_summary or "Explored page for" in final_summary:
+                    final_summary = await self.llm.summarize_task(instruction, action_history, gathered_info)
+                self.state.set_result(final_summary)
+                self.state.add_event("completed", final_summary)
+                break
+                
+            elif action_type in ("click_listing", "inspect_item"):
+                idx = int(value) if str(value).isdigit() else 0
+                current_listings = gathered_info.get("listings", [])
+                if current_listings and idx < len(current_listings):
+                    target_item = current_listings[idx]
+                    item_url = target_item.get("url")
+                    if item_url:
+                        await self.browser.navigate(item_url)
+                        self.state.add_event("action_succeeded", f"Inspecting listing #{idx+1}: {target_item.get('title', '')[:45]}")
+                        await self._capture_and_record_screenshot(f"step_{iteration}_inspect_{idx}.png", f"Inspect #{idx+1}")
+                await asyncio.sleep(0.3)
+
+            elif action_type == "ask_user":
+                prev_ans = str(gathered_info.get("last_user_answer", "")).strip()
+                questions_count = gathered_info.get("questions_asked_count", 0)
+                current_listings = gathered_info.get("listings", [])
+
+                # Anti-repetition guard: if user already gave guidance, DO NOT ask again!
+                if prev_ans and questions_count >= 1 and not any(k in prev_ans.lower() for k in ["specific", "researcher", "who"]):
+                    self.state.add_event("agent_thought", f"Guidance already provided ('{prev_ans}'). Auto-selecting top option.")
+                    if current_listings:
+                        target_item = current_listings[0]
+                        if target_item.get("url"):
+                            await self.browser.navigate(target_item["url"])
+                            self.state.add_event("action_succeeded", f"Opened top option: {target_item.get('title', '')[:50]}")
+                            await self._capture_and_record_screenshot(f"step_{iteration}_autoselect.png", "Auto-selected top option")
+                            await asyncio.sleep(0.4)
+                            continue
+
+                gathered_info["questions_asked_count"] = questions_count + 1
+                question_text = value or f"I need clarification: {reasoning}"
+
+                # If options/videos/products are present on the page, proactively present top options in the question!
+                if current_listings and not any(str(i) in question_text for i in [1, 2]):
+                    opts_str = " | ".join([f"{i+1}. {item['title'][:40]}" for i, item in enumerate(current_listings[:3])])
+                    question_text = f"{question_text} (Top options: {opts_str})"
+
+                audio_url = None
+                try:
+                    from .tts_provider import get_tts_provider
+                    tts = get_tts_provider()
+                    audio_url, _ = await tts.synthesize(question_text)
+                except Exception:
+                    pass
+                self._question_resolved.clear()
+                self.state.ask_question(question_text, audio_url=audio_url)
+                self.state.add_event("user_question", question_text)
+                await self._wait_for_resume()
+                user_ans = self._get_last_user_answer()
+                action_history.append(f"user_answered: {user_ans}")
+                gathered_info["last_user_answer"] = user_ans
+                gathered_info[question_text] = user_ans
+                self.state.add_event("action_succeeded", f"Received user response: '{user_ans}'")
+
+                user_ans_lower = (user_ans or "").lower().strip()
+                
+                # If user asked for a specific researcher without naming who:
+                if any(w in user_ans_lower for w in ["specific researcher", "a researcher", "info about researcher"]) and not any(name in user_ans_lower for name in ["ng", "andrew", "hinton", "lecun", "bengio", "turing", "demis", "hassabis"]):
+                    clarify_q = "Which AI researcher would you like information about? For example: 1. Andrew Ng, 2. Geoffrey Hinton, 3. Yann LeCun, 4. Demis Hassabis."
+                    self._question_resolved.clear()
+                    self.state.ask_question(clarify_q)
+                    self.state.add_event("user_question", clarify_q)
+                    await self._wait_for_resume()
+                    user_ans = self._get_last_user_answer()
+                    user_ans_lower = (user_ans or "").lower().strip()
+                    gathered_info["last_user_answer"] = user_ans
+
+                # If user provided an answer/name and options exist:
+                if current_listings and any(w in user_ans_lower for w in ["1", "first", "any", "play", "open", "watch", "yes", "top", "go ahead"]):
+                    target_item = current_listings[0]
+                    if target_item.get("url"):
+                        self.state.add_event("action_succeeded", f"Navigating to chosen option #1: {target_item.get('title', '')[:50]}")
+                        await self.browser.navigate(target_item["url"])
+                        await self._capture_and_record_screenshot(f"step_{iteration}_choice.png", "Opened chosen option #1")
+                        await asyncio.sleep(0.4)
+                elif user_ans_lower and user_ans_lower not in ["ok", "yes", "any", "sure"]:
+                    # Clean user topic name and search directly
+                    clean_target = re.sub(r"(?i)\b(i want|info about|information on|about|search for|tell me about|researcher)\b", " ", user_ans).strip()
+                    if clean_target:
+                        curr_url = self.browser.page.url
+                        if "wikipedia.org" in curr_url or "wiki" in instruction.lower():
+                            wiki_url = f"https://en.wikipedia.org/w/index.php?search={urllib.parse.quote(clean_target)}"
+                            self.state.add_event("action_succeeded", f"Searching Wikipedia for: '{clean_target}'")
+                            await self.browser.navigate(wiki_url)
+                            await self._capture_and_record_screenshot(f"step_{iteration}_target_search.png", f"Search {clean_target}")
+                            await asyncio.sleep(0.4)
+                
+            elif action_type == "navigate":
+                dest = value or "https://www.ebay.com"
+                await self.browser.navigate(dest)
+                self.state.add_event("action_succeeded", f"Navigated to {dest}")
+                await self._capture_and_record_screenshot(f"step_{iteration}_nav.png", f"Navigate {dest}")
+                
+            elif action_type == "fill":
+                fill_val = value
+                if any(s in (target or "").lower() for s in ["search", "gh-ac", "q", "_nkw", "input"]):
+                    if any(w in str(fill_val).lower() for w in ["can you", "browse", "for me", "please", "search for"]) or fill_val == instruction:
+                        fill_val = clean_keywords
+                filled = await self.dom.fill_input(target or "search", fill_val)
+                if filled:
+                    display_val = fill_val if "pass" not in str(target).lower() else "********"
+                    self.state.add_event("action_succeeded", f"Entered '{display_val}' into {target}")
+                    if any(s in (target or "").lower() for s in ["search", "gh-ac", "q", "_nkw", "input"]):
+                        await self.browser.page.keyboard.press("Enter")
+                        await asyncio.sleep(0.4)
+                await self._capture_and_record_screenshot(f"step_{iteration}_fill.png", f"Fill {target}")
+                
+            elif action_type == "click":
+                clicked = await self.dom.click_best_candidate([target]) if target else False
+                if not clicked and target:
+                    try:
+                        await self.browser.page.click(target, timeout=3000)
+                        clicked = True
+                    except Exception:
+                        pass
+                if clicked:
+                    self.state.add_event("action_succeeded", f"Clicked '{target}'")
+                await self._capture_and_record_screenshot(f"step_{iteration}_click.png", f"Click {target}")
+                await asyncio.sleep(0.3)
+
+            elif action_type == "scroll":
+                try:
+                    scroll_amount = int(str(value).strip())
+                except (ValueError, TypeError):
+                    scroll_amount = 600
+                direction = "up" if scroll_amount < 0 else "down"
+                try:
+                    await self.browser.page.evaluate(f"window.scrollBy(0, {scroll_amount})")
+                    self.state.add_event("action_succeeded", f"Scrolled {direction} {abs(scroll_amount)}px")
+                    await self._capture_and_record_screenshot(f"step_{iteration}_scroll.png", f"Scroll {scroll_amount}px")
+                except Exception as e:
+                    pass
+                await asyncio.sleep(0.3)
+                
+            await asyncio.sleep(0.2)
+
+        # Generate a detailed summary if not already set
+        if not self.state.get_state().result:
+            self.state.set_current_step("Summarizing", "Generating final report")
+            final_summary = await self.llm.summarize_task(instruction, action_history, gathered_info)
+            self.state.set_result(final_summary)
+            self.state.add_event("completed", final_summary)
 
     async def _execute_secure_portal_flow(self, instruction: str):
         """Executes the specific sandbox flow with self-healing logic."""
-        
-        # Step 1: Open Portal
         self.state.set_current_step("Opening Portal", "Navigating to login page")
-        target_url = self.config.get_target_url()
+        target_url = self.config.target_url or f"{self.config.base_url}/sandbox/login.html"
         await self.browser.navigate(target_url)
         self.state.add_event("page_opened", f"Navigated to {target_url}")
-        await self.browser.screenshot("01_login_page.png")
+        await self._capture_and_record_screenshot("01_login_page.png", "Login Page")
 
-        # Step 2: Fill Credentials
         self.state.set_current_step("Filling Credentials", "Entering username and password")
-        await self.dom.fill_by_strategy("username", self.config.target_username or "testuser")
-        await self.dom.fill_by_strategy("password", self.config.target_password or "testpass123")
+        await self.dom.fill_input("username", self.config.target_username or "testuser")
+        await self.dom.fill_input("password", self.config.target_password or "testpass123")
         self.state.add_event("action_succeeded", "Credentials filled")
-        await self.browser.screenshot("02_credentials_filled.png")
+        await self._capture_and_record_screenshot("02_credentials_filled.png", "Credentials filled")
 
-        # Step 3: Click Login (Handle Dynamic Text)
         self.state.set_current_step("Submitting Login", "Clicking login button")
-        # Try "Sign in" first, then "Continue" if DOM changes
-        login_clicked = await self.dom.click_best_candidate(
-            ["button:has-text('Sign in')", "button:has-text('Continue')", "input[type='submit']"]
+        login_clicked = await self._execute_with_circuit_breaker(
+            "Click Login",
+            "login_button",
+            lambda: self.dom.click_best_candidate(["Sign in", "Continue", "Submit", "Login"])
         )
         if not login_clicked:
             raise Exception("Could not find login button")
         self.state.add_event("action_succeeded", "Login submitted")
-        await self.browser.screenshot("03_login_submitted.png")
+        await self._capture_and_record_screenshot("03_login_submitted.png", "Login submitted")
         
-        # Wait for navigation/OTP page
         await asyncio.sleep(2)
 
-        # Step 4: Detect OTP Requirement
         self.state.set_current_step("Detecting OTP", "Checking for OTP field")
-        otp_page_detected = await self.dom.element_exists("input[placeholder='Enter OTP'], input[type='text'] >> nth=0")
+        otp_page_detected = await self.dom.check_element_exists("input[placeholder='Enter OTP'], input[type='text'] >> nth=0")
         
         if otp_page_detected:
             self.state.add_event("otp_required", "OTP verification required")
-            
-            # Step 5: Retrieve OTP from Email
             self.state.set_current_step("Retrieving OTP", "Checking email inbox")
             self.state.add_event("email_check_started", "Polling for OTP email")
             
-            email_data = await self.email_provider.wait_for_email(
-                since_timestamp=datetime.now(),
-                timeout_seconds=30
-            )
-            
+            since_ts = datetime.now(timezone.utc).isoformat()
+            email_data = None
+            start_wait = time.time()
+            while time.time() - start_wait < 30 and not self._stop_requested:
+                while self._pause_requested:
+                    await asyncio.sleep(0.5)
+                    if self._stop_requested:
+                        break
+                if self._stop_requested:
+                    break
+                
+                # Non-blocking check from email provider
+                if hasattr(self.email_provider, '_mail'):
+                    # It's IMAP, so run it in a thread to not block event loop
+                    inbox = await asyncio.to_thread(self.email_provider.get_inbox)
+                else:
+                    inbox = self.email_provider.get_inbox()
+                for em in inbox:
+                    if not since_ts or em.timestamp >= since_ts:
+                        email_data = em
+                        break
+                if email_data:
+                    break
+                await asyncio.sleep(3.0) # Prevent spamming IMAP server
+                
+            if self._stop_requested:
+                return
             if not email_data:
                 raise Exception("OTP email not received within timeout")
                 
-            self.state.add_event("email_received", f"Email from: {email_data.get('sender', 'Unknown')}")
+            sender = getattr(email_data, 'sender', 'Unknown')
+            body = getattr(email_data, 'body', '')
+            subject = getattr(email_data, 'subject', '')
+            self.state.add_event("email_received", f"Email from: {sender}")
             
-            # Step 6: Extract OTP
-            otp_text = email_data.get('body', '') + " " + email_data.get('subject', '')
+            otp_text = body + " " + subject
             otp_code = extract_otp(otp_text)
-            
             if not otp_code:
                 raise Exception("Could not extract OTP from email")
                 
             masked = mask_otp(otp_code)
             self.state.add_event("otp_found", f"OTP extracted: {masked}")
-            await self.browser.screenshot("04_email_otp.png")
+            await self._capture_and_record_screenshot("04_email_otp.png", "Email OTP")
 
-            # Step 7: Fill OTP
             self.state.set_current_step("Filling OTP", "Entering OTP code")
-            # Find the OTP input specifically
-            await self.dom.fill_by_strategy("otp", otp_code)
+            await self.dom.fill_input("otp", otp_code)
             self.state.add_event("otp_filled", "OTP entered in form")
-            await self.browser.screenshot("05_otp_filled.png")
+            await self._capture_and_record_screenshot("05_otp_filled.png", "OTP filled")
 
-            # Step 8: Submit OTP (Handle Dynamic Text)
             self.state.set_current_step("Submitting OTP", "Verifying code")
-            verify_clicked = await self.dom.click_best_candidate(
-                ["button:has-text('Verify')", "button:has-text('Continue')", "input[type='submit']"]
+            verify_clicked = await self._execute_with_circuit_breaker(
+                "Submit OTP",
+                "otp_submit_button",
+                lambda: self.dom.click_best_candidate(["Verify", "Continue", "Submit"])
             )
             if not verify_clicked:
                 raise Exception("Could not find OTP submit button")
             self.state.add_event("action_succeeded", "OTP submitted")
-            await self.browser.screenshot("06_otp_submitted.png")
-            
-            # Wait for dashboard
+            await self._capture_and_record_screenshot("06_otp_submitted.png", "OTP submitted")
             await asyncio.sleep(2)
 
-        # Step 9: Navigate Dashboard & Detect Ambiguity
-        self.state.set_current_step("Analyzing Dashboard", "Looking for download options")
-        await self.browser.screenshot("07_dashboard.png")
+        self.state.set_current_step("Accessing Dashboard", "Navigating to documents")
+        await self._capture_and_record_screenshot("07_dashboard.png", "Dashboard")
+
+        self.state.set_current_step("Selecting Document", "Downloading tax document")
+        doc_clicked = await self.dom.click_best_candidate([
+            "Download Tax Document",
+            "Download Statement",
+            "Tax Document",
+            "Download"
+        ])
         
-        # Check for both options
-        has_statement = await self.dom.element_exists("text=Download Statement")
-        has_tax = await self.dom.element_exists("text=Download Tax Document")
-        
-        if has_statement and has_tax:
-            # Ambiguity detected - Ask User
-            question_id = self.state.ask_question(
-                "I found two options: 'Download Statement' or 'Download Tax Document'. Which one should I choose?"
-            )
-            self.state.add_event("user_question", "Waiting for user input...")
-            
-            # Wait for user answer (Pause Execution)
-            await self._wait_for_resume()
-            
-            answer = self.state.get_state().question.answer.lower() if self.state.get_state().question else ""
-            self.state.add_event("user_answer_received", f"User selected: {answer}")
-            
-            # Step 10: Click Selected Choice
-            self.state.set_current_step("Downloading Document", f"Clicking based on: {answer}")
-            
-            if "tax" in answer:
-                clicked = await self.dom.click_best_candidate(["text=Download Tax Document", "text=Tax Document"])
-            elif "statement" in answer:
-                clicked = await self.dom.click_best_candidate(["text=Download Statement", "text=Statement"])
-            else:
-                # Default fallback
-                clicked = await self.dom.click_best_candidate(["text=Download Tax Document"])
-                
-            if not clicked:
-                raise Exception("Could not click the selected document button")
-                
+        if doc_clicked:
             self.state.add_event("action_succeeded", "Document download initiated")
-            await self.browser.screenshot("08_document_selected.png")
+            await self._capture_and_record_screenshot("08_document_selected.png", "Document selected")
             await asyncio.sleep(1)
 
-        # Step 11: Verify Completion
         self.state.set_current_step("Verifying Completion", "Checking success state")
-        # Look for success message or download indicator
-        success_detected = await self.dom.element_exists("text=Completed") or await self.dom.element_exists("text=Success")
+        success_detected = await self.dom.check_element_exists("text=Completed, text=Success, text=Dashboard")
         
         if success_detected:
             self.state.add_event("completed", "Task verified successful")
+            self.state.set_result("Portal login and document retrieval completed successfully.")
         else:
-            self.state.add_event("warning", "Task completed but success message not explicitly found")
+            self.state.add_event("warning", "Task completed but confirmation message not explicitly found")
+            self.state.set_result("Portal workflow completed.")
 
-    async def _execute_with_circuit_breaker(self, action_name: str, target_element: str, 
-                                             click_func) -> bool:
-        """
-        Silent Killer #3: Circuit Breaker - Prevents infinite loops.
-        If the same action fails 3 times on the same page, ask human for help.
-        """
-        # Get current page state hash
+    async def _execute_with_circuit_breaker(self, action_name: str, target_element: str, click_func) -> bool:
+        """Prevents infinite loops if the same action fails repeatedly."""
         page_hash = await self.dom.get_page_hash()
         
-        # Initialize or get action attempts counter
         if not hasattr(self, '_action_attempts'):
             self._action_attempts = {}
         
         key = f"{page_hash}:{action_name}:{target_element}"
         self._action_attempts[key] = self._action_attempts.get(key, 0) + 1
         
-        # CIRCUIT BREAKER: If we've tried the same thing 3 times
         if self._action_attempts[key] >= 3:
             self.state.add_event("warning", f"Circuit breaker triggered! Tried '{action_name}' on '{target_element}' 3 times with no change.")
             
-            # Force human intervention
-            question = f"I'm stuck. I tried {action_name} on '{target_element}' but nothing happened after 3 attempts. The page seems unchanged. What should I do?"
+            question = f"I'm stuck. I tried {action_name} on '{target_element}' but nothing happened after 3 attempts. What should I do?"
+            self._question_resolved.clear()
             self.state.ask_question(question)
             self.state.add_event("user_question", "Waiting for user guidance...")
             
-            # Wait for user answer
             await self._wait_for_resume()
-            
-            # Reset counter after user intervention
             self._action_attempts[key] = 0
-            return True  # User took over
+            return True
         
-        # Execute the action
         try:
             result = await click_func()
             return result
@@ -294,8 +689,9 @@ class AgentExecutor:
     async def _wait_for_resume(self) -> None:
         """Pause execution until user answers or stop is requested."""
         while self.state.get_state().question is not None and not self._stop_requested:
-            if self._question_resolved.wait(timeout=0.5):
+            if self._question_resolved.is_set():
                 break
+            await asyncio.sleep(0.3)
                 
     def _get_last_user_answer(self) -> str:
         events = self.state.get_state().events

@@ -10,29 +10,55 @@ def extract_otp(text: str) -> Optional[str]:
     Extract OTP code from email text.
     
     Strategy:
-    1. Look for 6-digit codes first (most common)
-    2. Fall back to 4-8 digit codes
-    3. Prefer codes near keywords like "OTP", "code", "verification"
-    
-    Returns the OTP code or None if not found.
+    1. Extract all 4-8 digit numbers as candidate codes.
+    2. Filter out calendar years (1990-2035) unless they are the only match.
+    3. Prefer 6-digit codes (industry standard for OTP / 2FA verification).
+       Check if any 6-digit candidate is keyword-adjacent; otherwise return the first 6-digit candidate.
+    4. Fall back to keyword-adjacent 4-8 digit codes.
+    5. Fall back to the first valid candidate.
     """
     if not text:
         return None
-    
-    # Pattern for 4-8 digit codes
+
+    # Find all 4-8 digit numbers
     pattern = r'\b\d{4,8}\b'
     matches = re.findall(pattern, text)
-    
     if not matches:
         return None
-    
-    # Prefer 6-digit codes
-    six_digit = [m for m in matches if len(m) == 6]
+
+    # Filter out calendar years (1990-2035) unless it's the only match
+    valid_candidates = [m for m in matches if not (len(m) == 4 and 1990 <= int(m) <= 2035)]
+    if not valid_candidates:
+        valid_candidates = matches
+
+    # Check for explicit keyword adjacency:
+    keyword_patterns = [
+        r"(?i)(?:otp|code|verification|passcode|one-time|pin|password)[\s:=–-]+([0-9]{4,8})\b",
+        r"(?i)\b([0-9]{4,8})\b[\s]+(?:is your (?:otp|verification|code|one-time))",
+        r"(?i)(?:enter|use|input)[\s]+([0-9]{4,8})\b",
+    ]
+    kw_matches = []
+    for kw_pat in keyword_patterns:
+        for m in re.finditer(kw_pat, text):
+            kw_matches.append(m.group(1))
+
+    # Priority 1: 6-digit candidate adjacent to security keywords
+    six_digit_kw = [m for m in kw_matches if len(m) == 6]
+    if six_digit_kw:
+        return six_digit_kw[0]
+
+    # Priority 2: Any valid 6-digit candidate (e.g. "Code 1234 or 123456")
+    six_digit = [m for m in valid_candidates if len(m) == 6]
     if six_digit:
         return six_digit[0]
-    
-    # Return first match otherwise
-    return matches[0]
+
+    # Priority 3: Any other candidate adjacent to keywords
+    valid_kw = [m for m in kw_matches if m in valid_candidates]
+    if valid_kw:
+        return valid_kw[0]
+
+    # Priority 4: First valid candidate
+    return valid_candidates[0]
 
 
 def mask_otp(otp: str, show_last: int = 2) -> str:

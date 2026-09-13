@@ -1,144 +1,468 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AURA Relay - Ask. Verify. Act.</title>
+    <link rel="shortcut icon" type="image/svg+xml" href="/logo.svg" />
+    <title>AURA Relay</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="/styles.css">
+    <script>
+        // Prevent FOUC by setting theme immediately
+        (function () {
+            let theme = localStorage.getItem('aura_theme');
+            if (!theme) {
+                theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
 </head>
+
 <body>
-    <div class="app-container">
-        <!-- Header -->
-        <header class="header">
-            <div class="logo-section">
-                <svg class="logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="50" cy="50" r="45" fill="none" stroke="#6366f1" stroke-width="3"/>
-                    <circle cx="50" cy="50" r="35" fill="none" stroke="#8b5cf6" stroke-width="2"/>
-                    <circle cx="50" cy="50" r="25" fill="none" stroke="#a855f7" stroke-width="2"/>
-                    <path d="M50 25 L50 50 L70 60" stroke="#6366f1" stroke-width="3" fill="none" stroke-linecap="round"/>
-                </svg>
-                <div class="title-section">
-                    <h1>AURA Relay</h1>
-                    <p class="tagline">Ask. Verify. Act.</p>
+    <div class="app-layout">
+        <!-- Navigation Header -->
+        <header class="navbar">
+            <div class="brand">
+                <img src="/logo.svg" alt="AURA Relay Logo" class="brand-logo-img"
+                    style="width: 38px; height: 38px; object-fit: contain; filter: drop-shadow(0 0 16px rgba(139, 92, 246, 0.6));" />
+                <div class="brand-text">
+                    <div class="brand-title">AURA <span class="accent-text">RELAY</span></div>
+                    <div class="brand-sub">Ask. Verify. Act.</div>
                 </div>
             </div>
-            <div class="environment-badge" id="envBadge">Sandbox</div>
+
+            <div class="nav-center">
+                <div class="status-badge" id="coworkerStatusBadge">
+                    <span class="status-dot pulse-green"></span>
+                    <span class="status-text" id="coworkerStatusText">Coworker Ready</span>
+                </div>
+            </div>
+
+            <div class="nav-actions">
+                <button class="icon-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Toggle Dark/Light Mode">
+                    <svg id="moonIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sunIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" style="display: none;">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+                <button class="icon-btn" id="muteToggleBtn" onclick="toggleMute()" title="Toggle Voice / Silent Mode">
+                    <svg id="soundIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                    </svg>
+                    <svg id="muteIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" style="display: none;">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <line x1="23" y1="9" x2="17" y2="15"></line>
+                        <line x1="17" y1="9" x2="23" y2="15"></line>
+                    </svg>
+                </button>
+                <button class="icon-btn" id="openSettingsBtn" title="Dashboard Settings">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path
+                            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+                        </path>
+                    </svg>
+                </button>
+            </div>
         </header>
 
-        <!-- Mission Control Panel -->
-        <section class="mission-control">
-            <div class="input-section">
-                <label for="instruction">Mission Instruction</label>
-                <textarea 
-                    id="instruction" 
-                    placeholder="Enter your instruction (e.g., 'Log into the secure portal, complete OTP verification, and retrieve the tax document.')"
-                    rows="3"
-                >Log into the secure portal, complete OTP verification, and retrieve the tax document.</textarea>
-                <div class="button-group">
-                    <button id="startBtn" class="btn btn-primary">
-                        <span class="btn-icon">▶</span> Start
-                    </button>
-                    <button id="stopBtn" class="btn btn-danger" disabled>
-                        <span class="btn-icon">⏹</span> Stop
-                    </button>
-                    <button id="retryBtn" class="btn btn-warning" disabled>
-                        <span class="btn-icon">↻</span> Retry
-                    </button>
+        <!-- Main Conversational Interface -->
+        <!-- Main Conversational Interface -->
+        <main class="main-content" style="flex-direction: row; display: flex; height: calc(100vh - 56px); overflow: hidden; width: 100%;">
+            <!-- Main Window: Live Browser -->
+            <div class="browser-main-panel" style="flex: 1; display: flex; flex-direction: column; padding: 20px; gap: 16px; background: transparent; overflow-y: auto; min-width: 0; height: 100%;">
+                
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+                    <div class="inspector-section" style="flex: 1; min-width: 280px;">
+                        <div class="step-card" style="margin: 0; background: var(--bg-surface); backdrop-filter: blur(20px);">
+                            <div class="step-header">Current Execution Step</div>
+                            <div class="step-title" id="inspectorStep">-</div>
+                            <div class="step-reason" id="inspectorReason">Ready for instruction</div>
+                        </div>
+                    </div>
+                    
+                    <div class="inspector-controls" style="flex-shrink: 0; display: flex; gap: 10px;">
+                        <button class="btn btn-warning btn-sm" id="pauseAgentBtn" onclick="pauseAgentExecution()" disabled style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.2); color: #f59e0b;">
+                            Pause / Take Over
+                        </button>
+                        <button class="btn btn-primary btn-sm" id="resumeAgentBtn" onclick="resumeAgentExecution()" style="display: none;">
+                            Resume Auto
+                        </button>
+                        <button class="btn btn-danger btn-sm" id="stopAgentBtn" onclick="stopAgentExecution()" disabled>
+                            Stop
+                        </button>
+                    </div>
                 </div>
-            </div>
-            
-            <div class="status-section">
-                <div class="status-card">
-                    <div class="status-label">Status</div>
-                    <div class="status-value" id="statusValue">idle</div>
-                </div>
-                <div class="status-card">
-                    <div class="status-label">Current Step</div>
-                    <div class="status-value" id="currentStep">-</div>
-                </div>
-                <div class="status-card">
-                    <div class="status-label">Next Step</div>
-                    <div class="status-value" id="nextStep">-</div>
-                </div>
-                <div class="status-card full-width">
-                    <div class="status-label">Agent Reason</div>
-                    <div class="status-value" id="reasonValue">Waiting for instruction...</div>
-                </div>
-            </div>
-        </section>
 
-        <!-- Main Content Grid -->
-        <div class="main-grid">
-            <!-- Transparency Timeline -->
-            <section class="timeline-section">
-                <h2>Live Transparency Timeline</h2>
-                <div class="timeline" id="timeline">
-                    <div class="timeline-item info">
-                        <div class="timeline-time">--:--:--</div>
-                        <div class="timeline-content">
-                            <div class="timeline-type">system</div>
-                            <div class="timeline-message">Ready to start. Enter instruction above.</div>
+                <div class="inspector-section" style="flex: 1; display: flex; flex-direction: column; min-height: 380px;">
+                    <div class="section-label" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+                        <span style="font-size: 0.85rem; font-weight: 600;">Live Browser Workspace</span>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button type="button" id="btnToggleInteract" onclick="toggleInteractiveMode()" class="btn btn-secondary btn-sm" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 10px; font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">
+                                <span id="interactStatusDot" style="width: 7px; height: 7px; border-radius: 50%; background: #94a3b8; display: inline-block;"></span>
+                                <span id="interactStatusText">Click-to-Interact: OFF</span>
+                            </button>
+                            <button type="button" class="btn-maximize-link" onclick="openViewportModal()" style="background: none; border: 1px solid rgba(129, 140, 248, 0.4); border-radius: 6px; padding: 4px 10px; font-size: 11px; color: #818cf8; cursor: pointer; transition: all 0.2s;">🔍 Full Screen</button>
+                        </div>
+                    </div>
+                    <div id="interactiveInputBar" style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+                        <input type="text" id="browserTypeInput" placeholder="Type text or search query into active page..." style="flex: 1; font-size: 0.82rem; padding: 6px 12px; border-radius: 8px; background: var(--bg-card); border: 1px solid var(--bg-card-border); color: var(--text-main);" onkeydown="if(event.key==='Enter') sendBrowserType(true)" />
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="sendBrowserType(true)" style="font-size: 0.8rem; padding: 6px 12px; flex: none;">Type &amp; Enter</button>
+                    </div>
+                    <div class="screenshot-box" id="screenshotBox" onclick="handleViewportClick(event, this)" title="Click to interact or maximize" style="flex: 1; min-height: 340px; box-shadow: var(--shadow-glass); border-radius: var(--radius-lg); background: var(--bg-card); cursor: pointer; overflow: hidden; position: relative;">
+                        <img id="liveScreenshot" src="" alt="Live Browser Viewport" style="display: none; width: 100%; height: 100%; object-fit: contain; position: absolute; inset: 0;" />
+                        <div class="no-preview" id="noPreview" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 1;">Browser Idle / Waiting for Action</div>
+                        <div class="screenshot-expand-overlay" id="screenshotExpandOverlay" style="position: absolute; inset: 0; background: rgba(0,0,0,0.6); color: white; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.2s; z-index: 5; pointer-events: none;">
+                            <span>🔍 Click to maximize</span>
                         </div>
                     </div>
                 </div>
-            </section>
+            
+                <!-- Browser Logs Panel (Bottom of Main Window) -->
+                <div class="main-logs-panel" style="margin-top: 4px; background: var(--bg-surface); border: 1px solid var(--bg-card-border); border-radius: var(--radius-md); padding: 12px 16px; backdrop-filter: blur(20px);">
+                    <!-- Logs Toggle Button -->
+                    <div style="display: flex; justify-content: center; margin: 4px 0;">
+                        <button type="button" id="toggleLogsBtn" class="btn btn-secondary btn-sm" onclick="toggleLogsView()" style="width: 100%; border-radius: var(--radius-full); font-size: 0.85rem; padding: 8px 16px;">
+                            <span id="toggleLogsIcon">▼</span> Show Technical Logs
+                        </button>
+                    </div>
 
-            <!-- Browser Evidence Panel -->
-            <section class="evidence-section">
-                <h2>Browser Evidence</h2>
-                <div class="screenshot-container">
-                    <img id="mainScreenshot" src="" alt="Latest screenshot will appear here" />
-                    <div class="no-screenshot" id="noScreenshot">No screenshots yet</div>
-                </div>
-                <div class="screenshot-thumbnails" id="screenshotThumbnails"></div>
-            </section>
+                    <!-- Hidden Logs Container -->
+                    <div id="logsContainer" style="display: none; flex-direction: column; gap: 16px; margin-top: 12px;">
+                        <!-- Live Timeline Logs -->
+                        <div class="inspector-section timeline-container" style="min-height: 120px;">
+                            <div class="section-label">Real-time Event Timeline</div>
+                            <div class="inspector-timeline" id="inspectorTimeline" style="max-height: 180px;">
+                                <div class="timeline-entry system">
+                                    <span class="time">--:--:--</span>
+                                    <span class="text">AURA Relay v2.0 initialized.</span>
+                                </div>
+                            </div>
+                        </div>
 
-            <!-- Email Panel -->
-            <section class="email-section">
-                <h2>Email Inbox</h2>
-                <div class="email-list" id="emailList">
-                    <div class="email-empty">Waiting for emails...</div>
+                        <!-- Live Backend Server Logs -->
+                        <div class="inspector-section" style="margin-top: 4px;">
+                            <div class="section-label" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <span>Backend Server Logs</span>
+                                <div style="display: flex; gap: 8px;">
+                                    <button type="button" class="btn-text-sm" onclick="fetchBackendLogs()" title="Refresh Logs" style="background: none; border: none; color: #818cf8; cursor: pointer; font-size: 11px; padding: 0;">🔄 Refresh</button>
+                                    <button type="button" class="btn-text-sm" onclick="clearBackendLogs()" title="Clear Logs" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 11px; padding: 0;">🧹 Clear</button>
+                                </div>
+                            </div>
+                            <div class="backend-terminal" id="backendTerminal" style="background: #090d16; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; font-family: var(--font-mono); font-size: 11px; padding: 8px 10px; max-height: 140px; overflow-y: auto; color: #94a3b8; line-height: 1.45; white-space: pre-wrap; word-break: break-all; box-shadow: inset 0 2px 10px rgba(0,0,0,0.2);">
+                                <div style="color: #64748b;">[Connecting to server logs...]</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            </section>
+            </div> <!-- CLOSE browser-main-panel -->
 
-            <!-- Human-in-the-Loop Panel -->
-            <section class="hitl-section">
-                <h2>Human-in-the-Loop</h2>
-                <div class="question-container" id="questionContainer">
-                    <div class="question-text" id="questionText">No pending questions</div>
+            <!-- Sidebar: Chat & Logs -->
+            <aside class="chat-sidebar" id="agentInspector" style="width: 440px; min-width: 380px; max-width: 480px; height: 100%; background: var(--bg-surface); border-left: 1px solid var(--bg-card-border); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); display: flex; flex-direction: column; z-index: 30; box-shadow: -10px 0 30px rgba(0,0,0,0.15);">
+                <div class="sidebar-body" style="flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 18px; height: 100%;">
+                    <!-- Chat Messages Stream -->
+                    <div class="chat-stream" id="chatStream" style="flex: 1; min-height: 250px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; padding-right: 6px;">
+                        <!-- Default Welcome Message -->
+                        <div class="chat-message assistant-message animate-fade" style="max-width: 100%; margin-top: 1vh; margin-bottom: 8px;">
+                            <div class="message-bubble" style="background: transparent; border: none; box-shadow: none; padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none;">
+                                <h1 style="font-size: 1.85rem; font-weight: 800; line-height: 1.15; letter-spacing: -0.03em; margin-bottom: 8px;">
+                                    AURA <span class="accent-text">Workspace.</span>
+                                </h1>
+                                <p style="font-size: 0.95rem; color: var(--text-muted); line-height: 1.5;">
+                                    Your elite AI coworker. I navigate sites, negotiate prices, manage portals, and conduct live research.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Suggested Quick Prompts -->
+                    <div class="quick-prompts" id="quickPrompts" style="margin-bottom: 0; display: flex; flex-wrap: wrap; gap: 6px;">
+                        <button class="chip" onclick="usePrompt('Find professional watches on eBay under $500')">
+                            ⌚ Buy watch &lt;$500
+                        </button>
+                        <button class="chip" onclick="usePrompt('Log into the secure portal, solve OTP, and download my tax document')">
+                            🔐 Portal &amp; OTP
+                        </button>
+                    </div>
+
+                    <!-- Floating Input Console -->
+                    <div class="input-console-container" style="margin-bottom: 0;">
+                        <form class="input-console" id="chatForm" onsubmit="handleChatSubmit(event)">
+                            <button type="button" class="btn-mic" id="micBtn" title="Click to speak (Voice Coworker Mode)">
+                                <div class="mic-waves"></div>
+                                <svg class="mic-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                                </svg>
+                            </button>
+
+                            <div class="input-field-wrapper">
+                                <input 
+                                    type="text" 
+                                    id="chatInput" 
+                                    placeholder="Type your request..." 
+                                    autocomplete="off"
+                                />
+                            </div>
+
+                            <button type="submit" class="btn-send" id="sendBtn" title="Send message">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                            </button>
+                        </form>
+                        <div class="voice-status-bar" id="voiceStatusBar">
+                            <span id="voiceStatusText">Press mic to talk</span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: center; margin-top: 4px;">
+                        <button class="btn btn-secondary btn-sm" onclick="clearConversation()" style="width: 100%;">
+                            Clear Chat & Workspace
+                        </button>
+                    </div>
+
                 </div>
-                <div class="answer-form">
-                    <input 
-                        type="text" 
-                        id="answerInput" 
-                        placeholder="Type your answer here..."
-                        disabled
-                    />
-                    <button id="sendAnswerBtn" class="btn btn-primary" disabled>Send</button>
-                    <button id="voiceBtn" class="btn btn-voice" title="Use voice input">
-                        🎤
-                    </button>
+            </aside>
+        </main>
+
+        <!-- Upfront Question / Human-in-the-Loop Modal (if needed) -->
+        <div class="modal-overlay hidden" id="questionModal">
+            <div class="modal-card">
+                <div class="modal-badge" style="display: inline-flex; align-items: center; gap: 6px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                    Coworker Needs Input
                 </div>
-                <div class="voice-status" id="voiceStatus">Voice: Not supported</div>
-            </section>
+                <h3 class="modal-title" id="questionModalTitle">AURA needs your guidance</h3>
+                <p class="modal-desc" id="questionModalDesc">Please clarify the following to proceed:</p>
+
+                <div class="modal-inputs" id="questionModalInputs"></div>
+
+                <div class="modal-actions">
+                    <button class="btn btn-primary" id="submitQuestionBtn" onclick="submitModalAnswer()">Continue
+                        Execution</button>
+                </div>
+            </div>
         </div>
 
-        <!-- Result Panel -->
-        <section class="result-section" id="resultSection" style="display: none;">
-            <h2>Mission Result</h2>
-            <div class="result-content">
-                <div class="result-status" id="resultStatus"></div>
-                <div class="result-message" id="resultMessage"></div>
-                <div class="result-evidence" id="resultEvidence"></div>
-            </div>
-        </section>
+        <!-- Dashboard Settings Modal (Requested by user) -->
+        <div class="modal-overlay hidden" id="settingsModal">
+            <div class="modal-card settings-card">
+                <div class="modal-header-row">
+                    <h3 style="display: flex; align-items: center; gap: 8px;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                        AURA Relay Settings
+                    </h3>
+                    <button class="modal-close" onclick="closeSettingsModal()" aria-label="Close">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+                <p class="settings-intro">Configure API integrations and credentials directly without modifying files.
+                </p>
 
-        <!-- Footer -->
-        <footer class="footer">
-            <p>AURA Relay v1.0.0 | Transparent AI Agent</p>
-        </footer>
+                <form id="settingsForm" onsubmit="saveSettings(event)">
+                    <!-- Anakin.io Settings -->
+                    <div class="form-group">
+                        <label>Anakin.io API Key <span class="badge-status" id="badgeAnakin">Checking...</span></label>
+                        <input type="password" id="cfgAnakinKey" placeholder="ask_..." />
+                        <small class="helper-text">Used for fast web reconnaissance, search &amp; anti-bot
+                            scraping.</small>
+                    </div>
+
+                    <!-- NVIDIA LLM Settings -->
+                    <div class="form-group">
+                        <label>NVIDIA NIM LLM Key <span class="badge-status" id="badgeLlm">Checking...</span></label>
+                        <input type="password" id="cfgLlmKey" placeholder="nvapi-..." />
+                    </div>
+
+                    <div class="form-group">
+                        <label>LLM Model</label>
+                        <input type="text" id="cfgLlmModel" value="nvidia/nemotron-3.5-lightning-30b-a3b" />
+                    </div>
+
+                    <!-- NVIDIA TTS Settings -->
+                    <div class="form-group">
+                        <label>NVIDIA TTS Key <span class="badge-status" id="badgeTts">Checking...</span></label>
+                        <input type="password" id="cfgTtsKey" placeholder="nvapi-..." />
+                    </div>
+
+                    <!-- Email / IMAP Settings -->
+                    <div class="form-group">
+                        <label>Email Provider (for OTP Capture)</label>
+                        <select id="cfgEmailProvider" onchange="toggleImapFields()">
+                            <option value="local">Local Sandbox Inbox (Mock)</option>
+                            <option value="imap">Live IMAP (Gmail / Outlook / Custom)</option>
+                        </select>
+                    </div>
+
+                    <div id="imapFields" class="hidden">
+                        <div class="form-row">
+                            <div class="form-group half">
+                                <label>IMAP Host</label>
+                                <input type="text" id="cfgImapHost" placeholder="imap.gmail.com" />
+                            </div>
+                            <div class="form-group half">
+                                <label>IMAP Port</label>
+                                <input type="number" id="cfgImapPort" value="993" />
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group half">
+                                <label>IMAP User</label>
+                                <input type="text" id="cfgImapUser" placeholder="user@gmail.com" />
+                            </div>
+                            <div class="form-group half">
+                                <label>IMAP Password (App Password)</label>
+                                <input type="password" id="cfgImapPassword" placeholder="App password" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="cfgHeadless" />
+                            Run browser in headless mode (invisible background)
+                        </label>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeSettingsModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="saveSettingsBtn">Save Settings</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Fullscreen Browser Viewport Lightbox Modal -->
+        <div class="modal-overlay hidden" id="viewportModal" onclick="closeViewportModal(event)">
+            <div class="viewport-lightbox-card" onclick="event.stopPropagation()">
+                <div class="lightbox-header">
+                    <div class="lightbox-title-wrap">
+                        <div class="live-dot-pulse"></div>
+                        <div>
+                            <div class="lightbox-title">Live Browser Viewport</div>
+                            <div class="lightbox-sub" id="lightboxUrl">Observing current page</div>
+                        </div>
+                    </div>
+                    <div class="lightbox-actions" style="display: flex; gap: 8px; align-items: center;">
+                        <a class="btn btn-secondary btn-sm" id="downloadScreenshotBtn" href="#"
+                            download="aura_viewport.png" target="_blank" style="display: inline-flex; align-items: center; gap: 6px;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            Save Image
+                        </a>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="closeViewportModal()" style="display: inline-flex; align-items: center; gap: 6px;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            Close (Esc)
+                        </button>
+                    </div>
+                </div>
+                <div class="lightbox-image-container" style="position: relative;">
+                    <img id="lightboxScreenshot" src="" alt="Fullscreen Browser Viewport" style="display: none; cursor: crosshair;" onclick="handleViewportClick(event, this)" title="Click to interact with browser" />
+                    <div id="lightboxPlaceholder" class="lightbox-placeholder"
+                        style="display: flex; flex-direction: column; align-items: center; justify-content: center; color: #94a3b8; text-align: center; padding: 40px;">
+                        <div class="live-dot-pulse" style="width: 22px; height: 22px; margin-bottom: 16px;"></div>
+                        <h3 style="color: #f8fafc; margin-bottom: 8px; font-size: 1.15rem;">Live Browser Session Ready
+                        </h3>
+                        <p style="max-width: 440px; font-size: 0.88rem; line-height: 1.5; color: #94a3b8;">AURA takes
+                            high-res screenshots on every navigation and action. Issue a task or request to view
+                            real-time visual execution.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Hidden Audio Element for Voice Playback -->
+        <audio id="auraAudioPlayer" preload="auto"></audio>
+
+        <!-- Login Overlay (Cinematic Entry) -->
+        <div class="modal-overlay" id="loginOverlay"
+            style="z-index: 9999; background: var(--bg-main); backdrop-filter: none; -webkit-backdrop-filter: none;">
+            <div class="modal-card"
+                style="border: none; background: transparent; box-shadow: none; max-width: 600px; text-align: center;">
+                <div class="brand" style="justify-content: center; margin-bottom: 32px;">
+                    <div class="brand-orb" style="width: 48px; height: 48px;">
+                        <div class="orb-core" style="inset: 6px;"></div>
+                        <div class="orb-ring" style="border-width: 2px;"></div>
+                    </div>
+                </div>
+                <h1
+                    style="font-size: clamp(2.5rem, 5vw, 4.5rem); font-weight: 800; line-height: 1.1; letter-spacing: -0.03em; margin-bottom: 16px;">
+                    Enter <span class="accent-text">AURA.</span>
+                </h1>
+                <p
+                    style="color: var(--text-muted); font-size: 1.1rem; margin-bottom: 40px; max-width: 400px; margin-left: auto; margin-right: auto;">
+                    Authenticate to access the autonomous workspace.
+                </p>
+                <form id="loginForm" onsubmit="handleLogin(event)"
+                    style="max-width: 320px; margin: 0 auto; text-align: left;">
+                    <div class="form-group" style="margin-bottom: 24px;">
+                        <input type="password" id="accessCodeInput" placeholder="Access Code (admin/password)" required
+                            style="padding: 16px 20px; font-size: 1.1rem; border-radius: 12px; text-align: center; letter-spacing: 0.1em; background: var(--bg-card); color: var(--text-main);"
+                            autofocus />
+                        <p class="error" id="loginErrorMsg"
+                            style="display: none; color: var(--danger); margin-top: 12px; font-size: 0.9rem; text-align: center;">
+                            Incorrect access code.</p>
+                    </div>
+                    <button type="submit" class="btn btn-primary"
+                        style="width: 100%; padding: 16px; font-size: 1.1rem; border-radius: 12px;">Authenticate</button>
+                </form>
+            </div>
+        </div>
     </div>
 
+    <script>
+        // Simple client-side auth check
+        document.addEventListener('DOMContentLoaded', () => {
+            const auth = localStorage.getItem('aura_dashboard_auth');
+            const overlay = document.getElementById('loginOverlay');
+            if (auth === 'true') {
+                overlay.style.display = 'none';
+            }
+        });
+
+        function handleLogin(e) {
+            e.preventDefault();
+            const code = document.getElementById('accessCodeInput').value;
+            if (code === 'admin' || code === 'password') {
+                localStorage.setItem('aura_dashboard_auth', 'true');
+                if (window.speechSynthesis) {
+                    window.speechSynthesis.resume();
+                }
+                const overlay = document.getElementById('loginOverlay');
+                overlay.style.opacity = '0';
+                setTimeout(() => { overlay.style.display = 'none'; }, 300);
+            } else {
+                document.getElementById('loginErrorMsg').style.display = 'block';
+            }
+        }
+    </script>
     <script src="/app.js"></script>
 </body>
+
 </html>
+

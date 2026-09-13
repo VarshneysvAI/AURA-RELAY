@@ -75,68 +75,72 @@ class BrowserManager:
                     self._playwright = None
 
         # Launch fresh browser with persistent session
+        # Launch fresh browser with persistent session
         self._playwright = await async_playwright().start()
 
-        # Browser launch arguments for better compatibility
+        # Clean any stale Singleton locks from previous abrupt stops so headful launch never fails
+        for lock_file in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
+            try:
+                (self.user_data_dir / lock_file).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        # Browser launch arguments for clean headful display and compatibility
         browser_args = [
-            "--disable-gpu",
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-web-security",
-            "--disable-features=VizDisplayCompositor",
+            "--start-maximized",
             "--disable-blink-features=AutomationControlled",
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ]
 
-        # Try to launch with display first, fallback to headless
+        # Launch browser context (preserving headful mode if configured)
         try:
             self._browser = await self._playwright.chromium.launch_persistent_context(
                 user_data_dir=str(self.user_data_dir),
                 headless=self.headless,
                 slow_mo=self.slow_mo,
                 args=browser_args,
-                viewport={"width": 1280, "height": 720},
+                no_viewport=True,
                 accept_downloads=True,
                 ignore_https_errors=True
             )
-            # For persistent context, the context IS the browser
             self._context = self._browser
             self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         except Exception as e:
-            # If headful fails, try headless
-            if not self.headless:
-                print(f"Headful launch failed: {e}, falling back to headless")
-                self.headless = True
-                try:
-                    self._browser = await self._playwright.chromium.launch_persistent_context(
-                        user_data_dir=str(self.user_data_dir),
-                        headless=True,
-                        slow_mo=self.slow_mo,
-                        args=browser_args[:5],  # Fewer args for headless
-                        viewport={"width": 1280, "height": 720},
-                        accept_downloads=True,
-                        ignore_https_errors=True
-                    )
-                    self._context = self._browser
-                    self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-                except Exception as e2:
-                    # Last resort: non-persistent headless
-                    print(f"Persistent launch failed: {e2}, using non-persistent")
-                    browser = await self._playwright.chromium.launch(
-                        headless=True,
-                        slow_mo=self.slow_mo,
-                        args=browser_args[:5]
-                    )
-                    self._context = await browser.new_context(
-                        viewport={"width": 1280, "height": 720}
-                    )
-                    self._page = await self._context.new_page()
-                    self._browser = browser  # Store browser for cleanup
-            else:
-                raise
+            print(f"Persistent context launch retry: {e}")
+            # Try fresh headful launch without locking user_data_dir
+            try:
+                browser = await self._playwright.chromium.launch(
+                    headless=self.headless,
+                    slow_mo=self.slow_mo,
+                    args=browser_args
+                )
+                self._context = await browser.new_context(no_viewport=True)
+                self._page = await self._context.new_page()
+                self._browser = browser
+            except Exception as e2:
+                print(f"Headful fallback error: {e2}")
+                browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    slow_mo=self.slow_mo,
+                    args=browser_args[:4]
+                )
+                self._context = await browser.new_context(no_viewport=True)
+                self._page = await self._context.new_page()
+                self._browser = browser
 
         self._launched = True
         print(f"Browser launched successfully (headless={self.headless})")
+
+    async def bring_to_front(self) -> None:
+        """Bring the active browser page to the foreground for human interaction."""
+        try:
+            if self._page and not self._page.is_closed():
+                await self._page.bring_to_front()
+        except Exception as e:
+            print(f"Could not bring page to front: {e}")
 
     async def launch(self, reuse_existing: bool = True) -> None:
         """Legacy launch method - delegates to ensure_launched."""
@@ -196,9 +200,12 @@ class BrowserManager:
             raise RuntimeError("Browser not launched. Call ensure_launched() first.")
         return self._context
 
-    async def navigate(self, url: str, wait_until: str = "networkidle", timeout: float = 30000) -> None:
+    async def navigate(self, url: str, wait_until: str = "domcontentloaded", timeout: float = 20000) -> None:
         """Navigate to a URL with configurable wait strategy."""
-        await self._page.goto(url, wait_until=wait_until, timeout=timeout)
+        try:
+            await self._page.goto(url, wait_until=wait_until, timeout=timeout)
+        except Exception as e:
+            print(f"Navigation warning to {url}: {e}")
 
     async def screenshot(self, name: str, step: str = "", full_page: bool = False) -> str:
         """
@@ -206,7 +213,7 @@ class BrowserManager:
 
         Returns the filename of the saved screenshot.
         """
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
         safe_name = "".join(c for c in name if c.isalnum() or c in "_-")[:50]
         filename = f"{timestamp}_{safe_name}.png"
         filepath = self.screenshot_dir / filename
