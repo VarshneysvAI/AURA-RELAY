@@ -337,6 +337,34 @@ function handleQuestion(question, questionId) {
 
 function speak(text) {
     if ('speechSynthesis' in window) {
+        speechSynthesis.cancel(); // Stop any previous speech
+        
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1;
+        utterance.pitch = 1;
+        
+        utterance.onend = () => {
+            // AUTO-LISTEN: Automatically start listening after speaking
+            if (recognition && !isListening) {
+                setTimeout(() => {
+                    try {
+                        recognition.start();
+                        isListening = true;
+                        if (elements.voiceBtn) elements.voiceBtn.style.background = '#ef4444';
+                        if (elements.voiceStatus) elements.voiceStatus.textContent = 'Voice: Listening...';
+                    } catch(e) {
+                        console.error('Auto-listen failed:', e);
+                    }
+                }, 500); // 500ms delay for mic to be ready
+            }
+        };
+        
+        speechSynthesis.speak(utterance);
+    }
+}
+
+function speakOLD(text) {
+    if ('speechSynthesis' in window) {
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.rate = 1;
         utterance.pitch = 1;

@@ -287,3 +287,29 @@ if __name__ == "__main__":
         host=config.app_host,
         port=config.app_port
     )
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Graceful shutdown - close browser properly."""
+    print("Shutting down AURA Relay...")
+    agent = get_agent()
+    if agent and hasattr(agent, 'browser') and agent.browser:
+        try:
+            # Schedule browser close on the agent's persistent loop
+            if hasattr(agent, 'loop') and agent.loop:
+                future = asyncio.run_coroutine_threadsafe(
+                    agent.browser.close(keep_session=True),
+                    agent.loop
+                )
+                # Wait briefly for cleanup
+                try:
+                    future.result(timeout=5)
+                except Exception:
+                    pass
+            # Stop the event loop
+            if hasattr(agent, 'loop') and agent.loop:
+                agent.loop.call_soon_threadsafe(agent.loop.stop)
+        except Exception as e:
+            print(f"Browser cleanup error: {e}")
+    print("Shutdown complete")

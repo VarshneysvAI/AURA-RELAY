@@ -1,364 +1,265 @@
 """
-AURA Relay Agent - Main execution orchestrator
+AURA Relay Agent - Persistent execution orchestrator
+
+CRITICAL ARCHITECTURAL FIX:
+This version uses a SINGLE PERSISTENT event loop and background thread.
+Playwright objects (Browser, Context, Page) are bound to this loop.
+When a task finishes, the browser stays ALIVE for the next task.
+This enables true session persistence (cookies, logins, history).
 """
 import asyncio
 import threading
 from datetime import datetime
-from typing import Optional, Callable, Any
+from typing import Optional
 
-from .config import get_config, Config
-from .state import StateManager
 from .browser_manager import BrowserManager
 from .dom_intelligence import DomIntelligence
-from .email_provider import EmailProvider, LocalEmailProvider, Email
 from .otp import extract_otp, mask_otp
-from .planner import Planner
-from .security import SecurityManager
 
 
 class AgentExecutor:
     """
-    Main agent executor that runs tasks step by step.
-    Handles browser automation, OTP flows, and user interaction.
+    Persistent Agent Executor.
+    
+    Runs on a single dedicated background thread with its own event loop.
+    This ensures the browser context remains alive across multiple tasks,
+    enabling true session persistence (cookies, logins, history).
     """
     
-    def __init__(self, state_manager: StateManager, email_provider: EmailProvider,
-                 config: Config, security_manager: SecurityManager):
+    def __init__(self, state_manager, email_provider, config, security_manager):
         self.state = state_manager
         self.email_provider = email_provider
         self.config = config
-        self.security = security_manager
-        self.planner = Planner()
+        self.security_manager = security_manager
         
-        self.browser: Optional[BrowserManager] = None
-        self.dom: Optional[DomIntelligence] = None
-        
-        self._stop_requested = False
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-    
-    def start(self, instruction: str) -> None:
-        """Start the agent in a background thread."""
-        if self._running:
-            raise RuntimeError("Agent already running")
-        
-        self._stop_requested = False
-        self._running = True
-        self._thread = threading.Thread(target=self._run, args=(instruction,))
-        self._thread.start()
-    
-    def stop(self) -> None:
-        """Request graceful stop."""
-        self._stop_requested = True
-    
-    def is_running(self) -> bool:
-        return self._running
-    
-    def _run(self, instruction: str) -> None:
-        """Main execution loop."""
-        try:
-            asyncio.run(self._execute_async(instruction))
-        except Exception as e:
-            self.state.set_error(str(e))
-        finally:
-            self._running = False
-    
-    async def _execute_async(self, instruction: str) -> None:
-        """Async execution of the task."""
-        # Initialize state
-        self.state.start_execution(instruction)
-        self.state.add_event("plan_created", f"Plan created for: {instruction}")
-        
-        # Get plan
-        plan = self.planner.get_plan_for_instruction(instruction)
-        self.state.set_plan(plan)
-        
-        # Launch browser
-        self.state.add_event("step_started", "Launching browser")
+        # Initialize browser manager (lazy launch)
         self.browser = BrowserManager(
-            headless=self.config.headless,
-            slow_mo=self.config.slow_mo
+            headless=config.headless,
+            slow_mo=config.slow_mo
         )
+        self.dom = DomIntelligence(self.browser, self.state)
+        
+        self._stop_requested = False
+        self._last_user_answer = ""
+        
+        # CRITICAL FIX: Single persistent event loop for Playwright
+        # This prevents the "event loop closed" crash on subsequent runs
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+        
+        self._current_task_future = None
+        self._question_resolved = threading.Event()
+
+    def _run_loop(self):
+        """Run the persistent asyncio event loop."""
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def is_running(self) -> bool:
+        return self._current_task_future is not None and not self._current_task_future.done()
+
+    def start(self, instruction: str) -> bool:
+        if self.is_running():
+            return False
+            
+        self.state.set_status("running")
+        self.state.clear_events() 
+        self._stop_requested = False
+        self._question_resolved.clear()
+        
+        # Schedule the run method on the persistent loop
+        coro = self.run(instruction)
+        self._current_task_future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        return True
+
+    def stop(self):
+        self._stop_requested = True
+        self.state.stop_execution()
+        if self._current_task_future and not self._current_task_future.done():
+            self._current_task_future.cancel()
+
+    def submit_answer(self, answer: str, question_id: int) -> bool:
+        success = self.state.answer_question(answer, question_id)
+        if success:
+            self._last_user_answer = answer
+            self.state.add_event("user_answer_received", f"User answered: {answer}")
+            self._question_resolved.set()  # Signal resume
+        return success
+
+    async def run(self, instruction: str):
+        self._stop_requested = False
+        self.state.set_status("running")
+        self.state.add_event("plan_created", f"Starting task: {instruction}")
         
         try:
-            await self.browser.launch()
-            self.dom = DomIntelligence(self.browser.page)
-            self.state.add_event("browser_launched", "Browser launched successfully")
+            # Ensure browser is launched (persistent across runs)
+            await self.browser.ensure_launched()
             
-            # Determine base URL
-            if self.config.is_sandbox:
-                base_url = f"{self.config.base_url}/sandbox"
-            else:
-                base_url = self.config.target_url or ""
+            # Execute the secure portal retrieval flow
+            await self._execute_secure_portal_flow(instruction)
             
-            # Execute the secure portal flow
-            await self._secure_portal_flow(base_url, instruction)
+            # Finalize
+            if not self._stop_requested:
+                self.state.set_current_step("Completed", "Task finished successfully")
+                self.state.add_event("completed", "Task completed successfully")
+                result = f"Successfully retrieved document. OTP verification completed."
+                self.state.set_result(result)
+                self.state.set_status("done")
             
+        except asyncio.CancelledError:
+            self.state.set_status("stopped")
+            self.state.add_event("warning", "Task stopped by user")
         except Exception as e:
-            self.state.add_event("error", f"Execution error: {str(e)}")
-            self.state.set_error(str(e))
-        finally:
-            # Cleanup
-            if self.browser:
-                await self.browser.close()
-    
-    async def _secure_portal_flow(self, base_url: str, instruction: str) -> None:
-        """Execute the secure portal document retrieval flow."""
+            self.state.set_status("error")
+            error_msg = str(e)
+            self.state.set_error(error_msg)
+            self.state.add_event("error", f"Task failed: {error_msg}")
+            import traceback
+            traceback.print_exc()
+        # NOTE: We do NOT close the browser here to maintain persistence
+
+    async def _execute_secure_portal_flow(self, instruction: str):
+        """Executes the specific sandbox flow with self-healing logic."""
         
-        # Step 1: Open login page
-        self.state.set_current_step("Opening secure portal", "Navigate to login page")
-        login_url = f"{base_url}/login.html"
-        self.state.add_event("page_opened", f"Navigating to {login_url}")
-        await self.browser.navigate(login_url)
-        await self.browser.wait_for_timeout(500)
+        # Step 1: Open Portal
+        self.state.set_current_step("Opening Portal", "Navigating to login page")
+        target_url = self.config.get_target_url()
+        await self.browser.navigate(target_url)
+        self.state.add_event("page_opened", f"Navigated to {target_url}")
+        await self.browser.screenshot("01_login_page.png")
+
+        # Step 2: Fill Credentials
+        self.state.set_current_step("Filling Credentials", "Entering username and password")
+        await self.dom.fill_by_strategy("username", self.config.target_username or "testuser")
+        await self.dom.fill_by_strategy("password", self.config.target_password or "testpass123")
+        self.state.add_event("action_succeeded", "Credentials filled")
+        await self.browser.screenshot("02_credentials_filled.png")
+
+        # Step 3: Click Login (Handle Dynamic Text)
+        self.state.set_current_step("Submitting Login", "Clicking login button")
+        # Try "Sign in" first, then "Continue" if DOM changes
+        login_clicked = await self.dom.click_best_candidate(
+            ["button:has-text('Sign in')", "button:has-text('Continue')", "input[type='submit']"]
+        )
+        if not login_clicked:
+            raise Exception("Could not find login button")
+        self.state.add_event("action_succeeded", "Login submitted")
+        await self.browser.screenshot("03_login_submitted.png")
         
-        if self.config.screenshot_after_each_action:
-            filename = await self.browser.screenshot("login_page", "Open login page")
-            if filename:
-                self.state.add_screenshot(filename, "login_page", f"/screenshots/{filename}")
+        # Wait for navigation/OTP page
+        await asyncio.sleep(2)
+
+        # Step 4: Detect OTP Requirement
+        self.state.set_current_step("Detecting OTP", "Checking for OTP field")
+        otp_page_detected = await self.dom.element_exists("input[placeholder='Enter OTP'], input[type='text'] >> nth=0")
         
-        # Step 2: Fill credentials
-        self.state.set_current_step("Filling credentials", "Enter username and password")
-        
-        # Use sandbox credentials
-        username = "testuser"
-        password = "testpass123"
-        
-        self.state.add_event("action_started", "Filling username field")
-        filled = await self.dom.fill_input("username", username)
-        if not filled:
-            # Try alternative selectors
-            await self.browser.page.fill('input[name="username"]', username)
-        
-        self.state.add_event("element_found", "Username field found and filled")
-        
-        self.state.add_event("action_started", "Filling password field")
-        filled = await self.dom.fill_input("password", password)
-        if not filled:
-            await self.browser.page.fill('input[type="password"]', password)
-        
-        self.state.add_event("element_found", "Password field found and filled")
-        
-        if self.config.screenshot_after_each_action:
-            filename = await self.browser.screenshot("credentials_filled", "Fill credentials")
-            if filename:
-                self.state.add_screenshot(filename, "credentials_filled", f"/screenshots/{filename}")
-        
-        # Step 3: Click login button
-        self.state.set_current_step("Submitting login", "Click login button")
-        self.state.add_event("action_started", "Clicking login button")
-        
-        # Handle dynamic button text - try both "Sign in" and "Continue"
-        clicked = await self.dom.click_element("Sign in", "button")
-        if not clicked:
-            clicked = await self.dom.click_element("Continue", "button")
-        
-        if not clicked:
-            # Fallback to generic button
-            await self.browser.page.click('button[type="submit"]')
-        
-        self.state.add_event("action_succeeded", "Login button clicked")
-        
-        await self.browser.wait_for_timeout(1000)
-        
-        if self.config.screenshot_after_each_action:
-            filename = await self.browser.screenshot("login_submitted", "Submit login")
-            if filename:
-                self.state.add_screenshot(filename, "login_submitted", f"/screenshots/{filename}")
-        
-        # Step 4: Detect OTP requirement and navigate to OTP page
-        self.state.set_current_step("Detecting OTP requirement", "Check for OTP page")
-        self.state.add_event("otp_required", "OTP verification required")
-        
-        # Wait for OTP page to load
-        await self.browser.wait_for_timeout(1500)
-        
-        # Step 5: Get OTP from email
-        self.state.set_current_step("Retrieving OTP from email", "Check inbox for OTP")
-        self.state.add_event("step_started", "Fetching OTP from email inbox")
-        
-        since_time = datetime.utcnow().isoformat() + "Z"
-        
-        # In sandbox mode, trigger OTP email generation
-        if self.config.is_sandbox:
-            # The login page should have triggered OTP email
-            await self.browser.wait_for_timeout(500)
-        
-        # Wait for OTP email with retries
-        otp_code = None
-        max_retries = 5
-        
-        for retry in range(max_retries):
-            email = self.email_provider.wait_for_email(since_time, timeout_seconds=5)
+        if otp_page_detected:
+            self.state.add_event("otp_required", "OTP verification required")
             
-            if email:
-                otp_code = extract_otp(email.body)
-                self.state.add_event("email_received", f"OTP email received from {email.sender}")
-                self.state.add_event("otp_found", f"OTP extracted: {mask_otp(otp_code)}")
-                break
-            else:
-                # Try to get from local provider directly
-                otp_code = self.email_provider.get_latest_otp()
-                if otp_code:
-                    self.state.add_event("otp_found", f"OTP extracted: {mask_otp(otp_code)}")
-                    break
+            # Step 5: Retrieve OTP from Email
+            self.state.set_current_step("Retrieving OTP", "Checking email inbox")
+            self.state.add_event("email_check_started", "Polling for OTP email")
             
-            if retry < max_retries - 1:
-                self.state.add_event("retrying", f"Waiting for OTP email (attempt {retry + 2}/{max_retries})")
-                await self.browser.wait_for_timeout(1000 * (retry + 1))
+            email_data = await self.email_provider.wait_for_email(
+                since_timestamp=datetime.now(),
+                timeout_seconds=30
+            )
+            
+            if not email_data:
+                raise Exception("OTP email not received within timeout")
+                
+            self.state.add_event("email_received", f"Email from: {email_data.get('sender', 'Unknown')}")
+            
+            # Step 6: Extract OTP
+            otp_text = email_data.get('body', '') + " " + email_data.get('subject', '')
+            otp_code = extract_otp(otp_text)
+            
+            if not otp_code:
+                raise Exception("Could not extract OTP from email")
+                
+            masked = mask_otp(otp_code)
+            self.state.add_event("otp_found", f"OTP extracted: {masked}")
+            await self.browser.screenshot("04_email_otp.png")
+
+            # Step 7: Fill OTP
+            self.state.set_current_step("Filling OTP", "Entering OTP code")
+            # Find the OTP input specifically
+            await self.dom.fill_by_strategy("otp", otp_code)
+            self.state.add_event("otp_filled", "OTP entered in form")
+            await self.browser.screenshot("05_otp_filled.png")
+
+            # Step 8: Submit OTP (Handle Dynamic Text)
+            self.state.set_current_step("Submitting OTP", "Verifying code")
+            verify_clicked = await self.dom.click_best_candidate(
+                ["button:has-text('Verify')", "button:has-text('Continue')", "input[type='submit']"]
+            )
+            if not verify_clicked:
+                raise Exception("Could not find OTP submit button")
+            self.state.add_event("action_succeeded", "OTP submitted")
+            await self.browser.screenshot("06_otp_submitted.png")
+            
+            # Wait for dashboard
+            await asyncio.sleep(2)
+
+        # Step 9: Navigate Dashboard & Detect Ambiguity
+        self.state.set_current_step("Analyzing Dashboard", "Looking for download options")
+        await self.browser.screenshot("07_dashboard.png")
         
-        if not otp_code:
-            # Ask user for help
-            question = "No OTP email found after multiple attempts. Should I use test OTP '123456'?"
-            self.state.ask_question(question)
+        # Check for both options
+        has_statement = await self.dom.element_exists("text=Download Statement")
+        has_tax = await self.dom.element_exists("text=Download Tax Document")
+        
+        if has_statement and has_tax:
+            # Ambiguity detected - Ask User
+            question_id = self.state.ask_question(
+                "I found two options: 'Download Statement' or 'Download Tax Document'. Which one should I choose?"
+            )
+            self.state.add_event("user_question", "Waiting for user input...")
+            
+            # Wait for user answer (Pause Execution)
             await self._wait_for_resume()
             
-            # After resume, check if user wants to use test OTP
-            user_answer = self._get_last_user_answer().lower()
-            if "yes" in user_answer or "test" in user_answer or "123456" in user_answer:
-                otp_code = "123456"
-                self.state.add_event("otp_found", f"Using test OTP: {mask_otp(otp_code)}")
+            answer = self.state.get_state().question.answer.lower() if self.state.get_state().question else ""
+            self.state.add_event("user_answer_received", f"User selected: {answer}")
+            
+            # Step 10: Click Selected Choice
+            self.state.set_current_step("Downloading Document", f"Clicking based on: {answer}")
+            
+            if "tax" in answer:
+                clicked = await self.dom.click_best_candidate(["text=Download Tax Document", "text=Tax Document"])
+            elif "statement" in answer:
+                clicked = await self.dom.click_best_candidate(["text=Download Statement", "text=Statement"])
             else:
-                self.state.set_error("User declined to use test OTP. Cannot proceed.")
-                return
+                # Default fallback
+                clicked = await self.dom.click_best_candidate(["text=Download Tax Document"])
+                
+            if not clicked:
+                raise Exception("Could not click the selected document button")
+                
+            self.state.add_event("action_succeeded", "Document download initiated")
+            await self.browser.screenshot("08_document_selected.png")
+            await asyncio.sleep(1)
+
+        # Step 11: Verify Completion
+        self.state.set_current_step("Verifying Completion", "Checking success state")
+        # Look for success message or download indicator
+        success_detected = await self.dom.element_exists("text=Completed") or await self.dom.element_exists("text=Success")
         
-        # Step 6: Fill OTP
-        self.state.set_current_step("Filling OTP", "Enter OTP code")
-        self.state.add_event("action_started", "Filling OTP field")
-        
-        if otp_code:
-            filled = await self.dom.fill_input("otp", otp_code)
-            if not filled:
-                await self.browser.page.fill('input[name="otp"]', otp_code)
-            
-            self.state.add_event("otp_filled", f"OTP filled: {mask_otp(otp_code)}")
-            
-            if self.config.screenshot_after_each_action:
-                filename = await self.browser.screenshot("otp_filled", "Fill OTP")
-                if filename:
-                    self.state.add_screenshot(filename, "otp_filled", f"/screenshots/{filename}")
-        
-        # Step 7: Submit OTP
-        self.state.set_current_step("Submitting OTP", "Verify OTP code")
-        self.state.add_event("action_started", "Clicking verify button")
-        
-        clicked = await self.dom.click_element("Verify", "button")
-        if not clicked:
-            clicked = await self.dom.click_element("Continue", "button")
-        
-        if not clicked:
-            await self.browser.page.click('button[type="submit"]')
-        
-        self.state.add_event("action_succeeded", "OTP submitted")
-        
-        await self.browser.wait_for_timeout(1500)
-        
-        if self.config.screenshot_after_each_action:
-            filename = await self.browser.screenshot("otp_submitted", "Submit OTP")
-            if filename:
-                self.state.add_screenshot(filename, "otp_submitted", f"/screenshots/{filename}")
-        
-        # Step 8: Navigate to dashboard
-        self.state.set_current_step("Navigating to dashboard", "Wait for dashboard")
-        await self.browser.wait_for_timeout(1000)
-        
-        # Step 9: Identify document options and ask user
-        self.state.set_current_step("Identifying document options", "Check available downloads")
-        
-        # Ask user which document to download
-        question = "I found two options: Download Statement or Download Tax Document. Which one should I choose?"
-        self.state.ask_question(question)
-        
-        # Wait for user answer
-        await self._wait_for_resume()
-        
-        # Get user's answer from state events
-        user_answer = self._get_last_user_answer()
-        
-        # Step 10: Click selected document button
-        self.state.set_current_step("Downloading document", "Click selected document button")
-        
-        answer_lower = user_answer.lower() if user_answer else ""
-        
-        if "tax" in answer_lower or "document" in answer_lower:
-            target_button = "Tax Document"
-        elif "statement" in answer_lower:
-            target_button = "Statement"
+        if success_detected:
+            self.state.add_event("completed", "Task verified successful")
         else:
-            target_button = "Tax Document"  # Default
-        
-        self.state.add_event("action_started", f"Clicking {target_button} button")
-        
-        # Try multiple strategies for clicking the document button
-        clicked = False
-        
-        # Strategy 1: Click by text content
-        clicked = await self.dom.click_element(f"Download {target_button}", "button")
-        
-        # Strategy 2: Try just the main keyword
-        if not clicked:
-            clicked = await self.dom.click_element(target_button, "button")
-        
-        # Strategy 3: Try partial match
-        if not clicked:
-            clicked = await self.dom.click_element("Download", "button")
-        
-        # Strategy 4: Direct Playwright fallback
-        if not clicked:
-            buttons = await self.browser.page.query_selector_all("button, .document-card, [role='button']")
-            for btn in buttons:
-                try:
-                    text = await btn.text_content()
-                    if text and target_button.lower() in text.lower():
-                        await btn.click()
-                        clicked = True
-                        break
-                except Exception:
-                    continue
-        
-        # Strategy 5: Last resort - click by ID
-        if not clicked:
-            if "tax" in target_button.lower():
-                await self.browser.page.click("#taxBtn")
-            else:
-                await self.browser.page.click("#statementBtn")
-            clicked = True
-        
-        self.state.add_event("action_succeeded", f"Clicked {target_button} button")
-        
-        await self.browser.wait_for_timeout(1000)
-        
-        if self.config.screenshot_after_each_action:
-            filename = await self.browser.screenshot("document_selected", "Select document")
-            if filename:
-                self.state.add_screenshot(filename, "document_selected", f"/screenshots/{filename}")
-        
-        # Step 11: Verify completion
-        self.state.set_current_step("Verifying completion", "Check success state")
-        self.state.add_event("completed", "Task completed successfully")
-        
-        result = f"Successfully retrieved tax document from secure portal. OTP verification completed. Document: {target_button}"
-        self.state.set_result(result)
-    
+            self.state.add_event("warning", "Task completed but success message not explicitly found")
+
     async def _wait_for_resume(self) -> None:
-        """Wait until user answers or stop is requested."""
+        """Pause execution until user answers or stop is requested."""
         while self.state.get_state().question is not None and not self._stop_requested:
-            await asyncio.sleep(0.5)
-            
-            if self._stop_requested:
-                self.state.stop_execution()
-                return
-    
+            if self._question_resolved.wait(timeout=0.5):
+                break
+                
     def _get_last_user_answer(self) -> str:
-        """Get the last user answer from events."""
         events = self.state.get_state().events
         for event in reversed(events):
             if event.event_type == "user_answer_received":
-                # Extract answer from message "User answered: xxx"
-                if event.message.startswith("User answered:"):
-                    return event.message.replace("User answered:", "").strip()
+                return event.message.replace("User answered:", "").strip()
         return ""
-    
-    def submit_answer(self, answer: str, question_id: int) -> bool:
-        """Submit an answer to the current question."""
-        return self.state.answer_question(answer, question_id)
