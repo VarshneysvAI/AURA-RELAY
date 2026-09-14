@@ -362,45 +362,52 @@ class DomIntelligence:
         return dismissed
     
     async def safe_click(self, target: str, element_type: str = "button", 
-                         max_retries: int = 5) -> bool:
+                         max_retries: int = 3) -> bool:
         """
         Silent Killer #2: Stale Element Protection
         Safely click an element with auto-wait, retry logic, and overlay dismissal.
         """
         # First dismiss any overlays
         await self.dismiss_overlays()
+        initial_url = self.page.url
         
         for attempt in range(max_retries):
             try:
-                print(f"DEBUG: safe_click target='{target}', element_type='{element_type}'")
                 # Use Playwright's role-based locator with auto-wait
                 locator = self.page.get_by_role(element_type, name=target)
                 
-                # Wait for element to be actionable
-                await locator.wait_for(state="attached", timeout=3000)
-                await locator.wait_for(state="visible", timeout=3000)
-                await locator.wait_for(state="enabled", timeout=3000)
+                # Wait for element to be actionable with brief timeout
+                await locator.wait_for(state="attached", timeout=1500)
+                await locator.wait_for(state="visible", timeout=1500)
+                await locator.wait_for(state="enabled", timeout=1500)
                 
                 # Highlight before clicking (Iron Man Vision)
                 await self.highlight_element(target, element_type)
                 
                 # Click with force option if needed
-                await locator.click(timeout=3000, force=False)
+                await locator.click(timeout=2000, force=False)
                 return True
                 
             except Exception as e:
                 error_msg = str(e).lower()
                 
+                # If element click triggered navigation or execution context destruction, it succeeded!
+                if any(kw in error_msg for kw in ["context was destroyed", "navigation", "navigated", "target closed"]):
+                    return True
+                if self.page.url != initial_url:
+                    return True
+                
                 # If element is stale/intercepted, retry
-                if any(kw in error_msg for kw in ["stale", "intercepted", "attached", "visible"]):
-                    await self.page.wait_for_timeout(500 * (attempt + 1))  # Exponential backoff
-                    await self.dismiss_overlays()  # Try dismissing again
+                if any(kw in error_msg for kw in ["stale", "intercepted", "attached", "visible"]) and attempt < max_retries - 1:
+                    await self.page.wait_for_timeout(300 * (attempt + 1))
+                    await self.dismiss_overlays()
                     continue
                 else:
-                    # Different error, log and retry once more
-                    print(f"Click attempt {attempt + 1} failed: {e}")
-                    await self.page.wait_for_timeout(500)
+                    await self.page.wait_for_timeout(200)
         
+        # Final check if URL changed during attempts
+        if self.page.url != initial_url:
+            return True
         return False
     
     async def highlight_element(self, target: str, element_type: str = "button") -> bool:
@@ -447,23 +454,23 @@ class DomIntelligence:
             """)
             
             # Brief pause so the highlight is visible (for screenshots/demo)
-            await self.page.wait_for_timeout(350)
+            await self.page.wait_for_timeout(250)
             return True
             
         except Exception as e:
-            # If highlighting fails, continue without it
-            print(f"Highlight failed: {e}")
             return False
 
-    async def click_best_candidate(self, selectors: List[str], max_retries: int = 3) -> bool:
+    async def click_best_candidate(self, selectors: List[str], max_retries: int = 1) -> bool:
         """
         Try multiple selectors in order of preference until one succeeds.
         Uses safe_click for each attempt to get retry logic and Iron Man vision.
         """
         import re
+        initial_url = self.page.url
         for selector in selectors:
-            # Extract clean text from selectors:
-            # Handles formats like "button:has-text('Sign in')", "text=Download", "'Sign in'"
+            if self.page.url != initial_url:
+                return True
+            # Extract clean text from selectors
             has_text_match = re.search(r":has-text\((['\"]?)(.*?)\1\)", selector)
             if has_text_match:
                 target_text = has_text_match.group(2)
@@ -480,7 +487,7 @@ class DomIntelligence:
             if await self.safe_click(target_text, "button", max_retries=max_retries):
                 return True
                 
-        return False
+        return self.page.url != initial_url
     
     async def get_page_hash(self) -> str:
         """Get a stable semantic hash representing current page state for circuit breaker."""
