@@ -133,8 +133,17 @@ class BrowserManager:
 
         self._launched = True
         
-        # Track new tabs
+        # Inject stealth scripts to avoid automated bot/Cloudflare detection
         if self._context:
+            try:
+                await self._context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                    window.chrome = { runtime: {} };
+                """)
+            except Exception:
+                pass
             self._context.on("page", self._handle_new_page)
             
         print(f"Browser launched successfully (headless={self.headless})")

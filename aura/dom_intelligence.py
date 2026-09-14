@@ -235,7 +235,13 @@ class DomIntelligence:
                 "just a moment...",
                 "please solve the challenge below",
                 "security verification",
+                "performing security verification",
+                "verifies you are not a robot",
+                "protect against malicious bots",
                 "bot detection",
+                "ray id:",
+                "turnstile",
+                "cloudflare",
             ]
             for sig in captcha_signatures:
                 if sig in text:

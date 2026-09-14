@@ -763,33 +763,59 @@ function initEventStream() {
 // =============================================================================
 
 let currentRenderedScreenshotUrl = '';
-let isLiveStreamActive = false;
+let liveViewportTimer = null;
+let isLivePolling = false;
 
 function activateLiveStream() {
-    const liveImg = document.getElementById('liveScreenshot');
-    const noPreview = document.getElementById('noPreview');
-    const streamUrl = '/api/browser/stream';
+    if (isLivePolling) return;
+    isLivePolling = true;
 
-    if (!liveImg) return;
-    if (isLiveStreamActive && liveImg.src && liveImg.src.includes('/api/browser/stream')) {
-        return;
+    function fetchFrame() {
+        if (!isLivePolling) return;
+        const preloader = new Image();
+        const liveImg = document.getElementById('liveScreenshot');
+        const noPreview = document.getElementById('noPreview');
+        const lightboxModal = document.getElementById('viewportModal');
+        const lightboxImg = document.getElementById('lightboxScreenshot');
+        const placeholder = document.getElementById('lightboxPlaceholder');
+
+        preloader.onload = () => {
+            currentRenderedScreenshotUrl = preloader.src;
+            if (liveImg) {
+                liveImg.src = preloader.src;
+                liveImg.style.display = 'block';
+            }
+            if (noPreview) noPreview.style.display = 'none';
+
+            if (lightboxModal && !lightboxModal.classList.contains('hidden') && lightboxImg) {
+                lightboxImg.src = preloader.src;
+                lightboxImg.style.display = 'block';
+                if (placeholder) placeholder.style.display = 'none';
+            }
+
+            if (isLivePolling) {
+                liveViewportTimer = setTimeout(fetchFrame, 280); // Smooth real-time ~3.5-4 FPS video
+            }
+        };
+
+        preloader.onerror = () => {
+            if (isLivePolling) {
+                liveViewportTimer = setTimeout(fetchFrame, 800);
+            }
+        };
+
+        preloader.src = `/api/browser/live.jpg?t=${Date.now()}`;
     }
 
-    isLiveStreamActive = true;
-    liveImg.onload = () => {
-        liveImg.style.display = 'block';
-        if (noPreview) noPreview.style.display = 'none';
-    };
-    liveImg.onerror = () => {
-        isLiveStreamActive = false;
-    };
-    liveImg.src = `${streamUrl}?t=${Date.now()}`;
-    liveImg.style.display = 'block';
-    if (noPreview) noPreview.style.display = 'none';
+    fetchFrame();
 }
 
 function deactivateLiveStream(lastScreenshotPath = null) {
-    isLiveStreamActive = false;
+    isLivePolling = false;
+    if (liveViewportTimer) {
+        clearTimeout(liveViewportTimer);
+        liveViewportTimer = null;
+    }
     if (lastScreenshotPath) {
         updateRenderedScreenshot(lastScreenshotPath, true);
     }

@@ -225,8 +225,11 @@ class AgentExecutor:
         target_url = gathered_info.get("target_url")
         if not target_url:
             url_match = re.search(r"https?://[^\s]+", instruction)
+            inst_low = instruction.lower()
             if url_match:
                 target_url = url_match.group(0)
+            elif any(p in inst_low for p in ["google", "ebay", "amazon", "youtube", "wikipedia", "wiki", "search", "browse", "find", "look for"]):
+                target_url = build_search_url(clean_info.get("platform", "google"), clean_keywords, max_price)
             elif search_results and search_results.get("results") and search_results["results"][0].get("url", "").startswith("http"):
                 target_url = search_results["results"][0]["url"]
                 self.state.add_event("direct_source_selected", f"Navigating to primary source from Anakin: {target_url}")
@@ -328,26 +331,77 @@ class AgentExecutor:
                 # 2. Use Anakin.ai anti-block scraper / search credits to bypass
                 if self.anakin.is_configured():
                     current_url = self.browser.page.url
-                    if "google.com" in current_url or "search" in current_url:
-                        self.state.add_event("anakin_query", f"Querying Anakin web intelligence for '{clean_keywords or clean_query}' to bypass search block")
+                    if "google.com" in current_url or "search" in current_url or "sorry" in current_url:
+                        self.state.add_event("anakin_query", f"Querying Anakin AI search for '{clean_keywords or clean_query}' to bypass search block")
                         anakin_res = await self.anakin.search(clean_keywords or clean_query, limit=5)
                         if anakin_res and anakin_res.get("results"):
                             results = anakin_res["results"]
-                            snippets = [f"- {r.get('title', '')}: {r.get('snippet', '')}" for r in results]
-                            gathered_info["captcha_bypassed_intel"] = "\n".join(snippets)
-                            self.state.add_event("action_succeeded", f"Anakin retrieved {len(results)} search results bypassing bot detection!")
-                            top_url = results[0].get("url")
-                            if top_url and top_url.startswith("http"):
-                                await self.browser.navigate(top_url)
-                                await self._capture_and_record_screenshot(f"step_{iteration}_anakin_nav.png", "Navigated to Anakin source")
-                                continue
+                            html_results = "".join([
+                                f"<div style='margin-bottom:18px;'><a href='{r.get('url','#')}' style='font-size:18px;color:#1a0dab;font-weight:500;'>{r.get('title','')}</a><div style='color:#006621;font-size:13px;'>{r.get('url','')}</div><div style='color:#545454;font-size:13px;'>{r.get('snippet','')}</div></div>"
+                                for r in results
+                            ])
+                            bypass_page = f"""
+                            <!DOCTYPE html>
+                            <html>
+                            <head><title>Search Results (Anakin Cloud Bypass)</title>
+                            <style>body {{ font-family: Arial, sans-serif; padding: 24px 36px; background: #fff; color: #202124; }}</style>
+                            </head>
+                            <body>
+                            <div style="background:#e8f0fe; color:#1967d2; padding:10px 14px; border-radius:6px; margin-bottom:20px; font-size:13px; font-weight:500;">
+                                ⚡ Bot check bypassed via Anakin.ai AI Web Intelligence
+                            </div>
+                            <h3>Search results for: <i>{clean_keywords or clean_query}</i></h3>
+                            {html_results}
+                            </body>
+                            </html>
+                            """
+                            try:
+                                await self.browser.page.set_content(bypass_page)
+                                await asyncio.sleep(0.4)
+                                await self._capture_and_record_screenshot(f"step_{iteration}_google_bypassed.png", "Google CAPTCHA Bypassed via Anakin")
+                            except Exception:
+                                pass
+                            
+                            gathered_info["listings"] = [
+                                {"title": r.get("title", ""), "url": r.get("url", ""), "price": r.get("snippet", "")[:60], "source": "Anakin Search"}
+                                for r in results
+                            ]
+                            self.state.add_event("action_succeeded", f"Anakin retrieved and rendered {len(results)} search results bypassing bot detection!")
+                            continue
                     else:
                         self.state.add_event("anakin_query", f"Bypassing blocked page using Anakin anti-block cloud scraper for {current_url}")
                         scraped = await self.anakin.scrape_url(current_url, use_browser=True, timeout=25.0)
                         if scraped and not scraped.get("error"):
-                            page_text = scraped.get("text") or scraped.get("content") or str(scraped)
-                            gathered_info["scraped_content"] = page_text[:4000]
-                            self.state.add_event("action_succeeded", "Anakin anti-block scraper extracted page content successfully.")
+                            content_body = scraped.get("html") or scraped.get("markdown") or scraped.get("content") or scraped.get("text") or ""
+                            gathered_info["scraped_content"] = content_body[:4000]
+                            
+                            if not content_body.strip().startswith("<!DOCTYPE") and not content_body.strip().startswith("<html"):
+                                render_html = f"""
+                                <!DOCTYPE html>
+                                <html>
+                                <head><title>{title or 'Unblocked Content'}</title>
+                                <style>body {{ font-family: sans-serif; padding: 24px; line-height: 1.6; background: #fff; color: #111; }}</style>
+                                </head>
+                                <body>
+                                <div style="background: #e0f2fe; color: #0369a1; padding: 10px 14px; border-radius: 6px; margin-bottom: 20px; font-weight: 500;">
+                                    ⚡ Bot verification passed via Anakin.ai Anti-Block Cloud Engine
+                                </div>
+                                <h2>{title or current_url}</h2>
+                                <div>{content_body}</div>
+                                </body>
+                                </html>
+                                """
+                            else:
+                                render_html = content_body
+                                
+                            try:
+                                await self.browser.page.set_content(render_html)
+                                await asyncio.sleep(0.4)
+                                await self._capture_and_record_screenshot(f"step_{iteration}_anakin_bypassed.png", "Anakin Cloud Bypass")
+                            except Exception:
+                                pass
+                            self.state.add_event("action_succeeded", "Anakin anti-block scraper rendered unblocked page content successfully.")
+                            continue
             
             # Extract structured product cards / listings on search & shopping pages
             listings = await self.dom.extract_listings()

@@ -779,13 +779,25 @@ async def browser_stream():
 
 @app.get("/api/browser/live.jpg")
 async def browser_live_jpeg():
-    """Retrieve single latest live JPEG frame of the active browser."""
+    """Retrieve latest live JPEG frame of the active browser."""
     agent = get_agent()
     if agent:
         frame_bytes = await agent.safe_get_live_frame(image_type="jpeg", quality=75)
         if frame_bytes:
             from fastapi.responses import Response
-            return Response(content=frame_bytes, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+            return Response(
+                content=frame_bytes,
+                media_type="image/jpeg",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
+    screenshots = list(Path("runtime/screenshots").glob("*.png"))
+    if screenshots:
+        latest = max(screenshots, key=lambda f: f.stat().st_mtime)
+        return FileResponse(str(latest), media_type="image/png", headers={"Cache-Control": "no-cache"})
     raise HTTPException(status_code=404, detail="Browser frame not available")
 
 
