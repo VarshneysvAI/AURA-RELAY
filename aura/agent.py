@@ -618,8 +618,12 @@ class AgentExecutor:
                 
             await asyncio.sleep(0.2)
 
-        # Generate a detailed summary if not already set
+        # Generate a detailed summary if not already set and not stopped
         if not self.state.get_state().result:
+            if self._stop_requested:
+                self.state.set_result("Task was stopped by user.")
+                self.state.add_event("stopped", "Task execution stopped by user request.")
+                return
             self.state.set_current_step("Summarizing", "Generating final report")
             final_summary = await self.llm.summarize_task(instruction, action_history, gathered_info)
             self.state.set_result(final_summary)

@@ -352,12 +352,45 @@ class NvidiaLLMProvider:
         Phase 1 & 2: Analyze task upfront as a smart coworker with conversational memory.
         Identify requirements, credentials, OTP preferences, and initial plan.
         """
-        # Conversational inquiry or greeting check first
+        # Intent checks before planning
+        from .query_cleaner import is_stop_intent, is_conversational_closure, is_conversational_inquiry
+        if is_stop_intent(user_goal):
+            return {
+                "task_type": "stop",
+                "summary": "Task cancelled by user",
+                "optimized_search_query": "",
+                "target_url": None,
+                "needs_upfront_info": False,
+                "questions": [],
+                "coworker_message": "Understood! I've stopped the task. Let me know whenever you'd like to start something else.",
+                "steps": [],
+            }
+
+        if is_conversational_closure(user_goal):
+            user_lower = user_goal.lower().strip()
+            if any(w in user_lower for w in ["thank", "thanks", "great job", "awesome"]):
+                msg = "You're very welcome! Let me know whenever you have another task or question."
+            elif any(w in user_lower for w in ["bye", "goodbye", "see you"]):
+                msg = "Goodbye! Have a great day, and feel free to call on me anytime."
+            else:
+                msg = "No problem at all! If you need anything else, just let me know."
+            return {
+                "task_type": "closure",
+                "summary": "Conversational closure",
+                "optimized_search_query": "",
+                "target_url": None,
+                "needs_upfront_info": False,
+                "questions": [],
+                "coworker_message": msg,
+                "steps": [],
+            }
+
+        # Conversational inquiry or greeting check
         user_lower = user_goal.lower().strip()
         is_greeting = any(w in user_lower for w in ["listen", "hear me", "hello", "hi ", "hey", "can you hear", "can you listen"])
         is_capability_query = any(w in user_lower for w in ["describe your work", "how do you work", "what can you do", "who are you", "what is aura"])
 
-        if is_greeting or is_capability_query:
+        if is_greeting or is_capability_query or is_conversational_inquiry(user_goal):
             if any(w in user_lower for w in ["listen", "hear"]):
                 reply = "Yes, I can hear you clearly! I am AURA, your autonomous AI coworker. What task, research, or product search would you like me to tackle for you?"
             elif any(w in user_lower for w in ["hello", "hi ", "hey"]):
@@ -454,9 +487,10 @@ class NvidiaLLMProvider:
             "1. NEVER ask more than ONE question at a time. Asking multiple questions overwhelms the user.\n"
             "2. If the user already specified the item and budget (e.g. '$300 watches' or 'mechanical keyboards under $100'), do NOT ask questions! Set needs_upfront_info: false and questions: [].\n"
             "3. If the task is open web browsing, research, news, or public shopping, set needs_upfront_info: false and questions: [].\n"
+            "4. If the user is expressing a closure/courtesy ('no thank you', 'thanks', 'all good', 'bye') or asking to stop ('stop', 'cancel'), set task_type to 'closure' or 'stop', optimized_search_query: '', needs_upfront_info: false, questions: [], steps: [].\n"
             "Respond ONLY with a valid JSON object matching this schema:\n"
             "{\n"
-            '  "task_type": "ecommerce" | "portal_login" | "data_extraction" | "general_browsing" | "research" | "negotiation",\n'
+            '  "task_type": "ecommerce" | "portal_login" | "data_extraction" | "general_browsing" | "research" | "negotiation" | "inquiry" | "closure" | "stop",\n'
             '  "summary": "Short 1-sentence description of what will be done",\n'
             '  "optimized_search_query": "Concise 2-4 word query (e.g. latest AI news)",\n'
             '  "target_url": "https://..." or null,\n'

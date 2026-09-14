@@ -310,6 +310,9 @@ async function sendChatMessage(message, gatheredInfo = null) {
         } else if (data.type === 'task_started') {
             updateCoworkerStatus('Executing Task', 'active');
             speakCoworker(replyText, data.audio_url);
+        } else if (data.action === 'closure' || data.action === 'stopped') {
+            updateCoworkerStatus(data.action === 'stopped' ? 'Stopped' : 'Ready', 'default');
+            speakCoworker(replyText, data.audio_url);
         } else {
             // Conversational reply or guidance: automatically open mic for seamless autonomous interaction!
             speakCoworker(replyText, data.audio_url, () => {

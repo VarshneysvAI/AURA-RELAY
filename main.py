@@ -288,7 +288,68 @@ async def chat_endpoint(req: ChatRequest):
     tts = get_tts_provider()
     agent = get_agent()
 
-    # 0. If agent is currently running and waiting for user input, route message directly as the answer!
+    from aura.query_cleaner import is_stop_intent, is_conversational_closure, is_conversational_inquiry
+
+    # 1. Stop / Cancel Intent: User explicitly requested to stop/cancel
+    if is_stop_intent(user_msg):
+        was_running = agent.is_running()
+        if was_running:
+            agent.stop()
+            state_manager.stop_execution()
+        pending_task_context = None
+        reply = (
+            "I've stopped the task. Let me know whenever you'd like to start something else!"
+            if was_running else
+            "Understood! No tasks are currently running. What would you like to explore next?"
+        )
+        audio_url, _ = await tts.synthesize(reply)
+        conversation_history.append({"role": "assistant", "content": reply})
+        return {
+            "type": "chat_reply",
+            "reply": reply,
+            "audio_url": audio_url,
+            "action": "stopped"
+        }
+
+    # 2. Conversational Closure / Courtesy: "no thank you", "no thanks", "nothing else", "i'm good", "that's all", "bye"
+    if is_conversational_closure(user_msg):
+        if agent.is_running():
+            agent.stop()
+            state_manager.stop_execution()
+        pending_task_context = None
+
+        user_lower = user_msg.lower()
+        if any(w in user_lower for w in ["thank", "thanks", "great job", "awesome"]):
+            reply = "You're very welcome! Let me know whenever you have another task."
+        elif any(w in user_lower for w in ["bye", "goodbye"]):
+            reply = "Goodbye! Have a great day, and feel free to reach out anytime."
+        else:
+            reply = "No problem at all! If you need anything else, just let me know."
+
+        audio_url, _ = await tts.synthesize(reply)
+        conversation_history.append({"role": "assistant", "content": reply})
+        return {
+            "type": "chat_reply",
+            "reply": reply,
+            "audio_url": audio_url,
+            "action": "closure"
+        }
+
+    # 3. Conversational Greeting or Capability Inquiry: Respond directly without pre-flight search
+    if is_conversational_inquiry(user_msg):
+        plan = await llm.plan_task(user_msg, conversation_history=conversation_history)
+        coworker_msg = plan.get("coworker_message") or "Hello! I am AURA, your autonomous AI coworker. How can I help you today?"
+        audio_url, _ = await tts.synthesize(coworker_msg)
+        conversation_history.append({"role": "assistant", "content": coworker_msg})
+        return {
+            "type": "chat_reply",
+            "reply": coworker_msg,
+            "plan": plan,
+            "audio_url": audio_url,
+            "action": "none"
+        }
+
+    # 4. If agent is currently running and waiting for user input, route message directly as the answer!
     if agent.is_running() and (state_manager.get_state().status == "waiting_for_user" or (hasattr(agent, "_question_resolved") and not agent._question_resolved.is_set())):
         agent.submit_answer(user_msg)
         coworker_msg = f"Got it! Continuing with your choice: '{user_msg}'"
@@ -301,7 +362,7 @@ async def chat_endpoint(req: ChatRequest):
             "action": "answering"
         }
 
-    # 1. If we were waiting for an answer to an upfront question, this message is the user's answer!
+    # 5. If we were waiting for an answer to an upfront question, this message is the user's answer!
     if pending_task_context:
         orig_goal = pending_task_context.get("goal", user_msg)
         pending_task_context = None
@@ -353,7 +414,7 @@ async def chat_endpoint(req: ChatRequest):
             "action": "executing"
         }
 
-    # 2. Extract clean search parameters via fast heuristic cleaner
+    # 6. Extract clean search parameters via fast heuristic cleaner
     clean_info = await llm.optimize_search_query(user_msg, conversation_history)
     clean_query = clean_info["keywords"]
     platform = clean_info["platform"]
@@ -383,9 +444,13 @@ async def chat_endpoint(req: ChatRequest):
     audio_url, _ = await tts.synthesize(coworker_msg)
     
     # If the user is having a conversation or asking about capabilities:
-    is_inquiry = plan.get("task_type") == "inquiry" or any(
-        phrase in user_msg.lower()
-        for phrase in ["describe your work", "how do you work", "what can you do", "who are you", "help me understand"]
+    is_inquiry = (
+        plan.get("task_type") in ["inquiry", "closure", "stop"]
+        or not plan.get("steps")
+        or any(
+            phrase in user_msg.lower()
+            for phrase in ["describe your work", "how do you work", "what can you do", "who are you", "help me understand"]
+        )
     )
     if is_inquiry:
         conversation_history.append({"role": "assistant", "content": coworker_msg})
@@ -693,15 +758,13 @@ async def start_agent(request: StartRequest):
 
 @app.post("/api/stop")
 async def stop_agent():
-    """Stop the running agent."""
+    """Stop the running agent safely and idempotently."""
+    global pending_task_context
+    pending_task_context = None
     agent = get_agent()
-    
-    if not agent.is_running():
-        raise HTTPException(status_code=400, detail="Agent not running")
-    
-    agent.stop()
+    if agent.is_running():
+        agent.stop()
     state_manager.stop_execution()
-    
     return {"status": "stopped"}
 
 

@@ -75,3 +75,64 @@ def test_browser_manager_screenshot_bytes_method():
     bm = BrowserManager()
     assert hasattr(bm, "screenshot_bytes")
     assert callable(bm.screenshot_bytes)
+
+
+def test_intent_classification():
+    from aura.query_cleaner import is_stop_intent, is_conversational_closure, is_conversational_inquiry
+
+    # Stop intents
+    assert is_stop_intent("stop") is True
+    assert is_stop_intent("stop please") is True
+    assert is_stop_intent("please stop") is True
+    assert is_stop_intent("cancel") is True
+    assert is_stop_intent("cancel task") is True
+    assert is_stop_intent("stop it") is True
+    assert is_stop_intent("stop that") is True
+    assert is_stop_intent("halt") is True
+    assert is_stop_intent("abort") is True
+    assert is_stop_intent("browse google for latest news") is False
+    assert is_stop_intent("find watches on ebay under 200") is False
+
+    # Conversational closure
+    assert is_conversational_closure("no thank you") is True
+    assert is_conversational_closure("no thanks") is True
+    assert is_conversational_closure("no, thank you") is True
+    assert is_conversational_closure("that's all") is True
+    assert is_conversational_closure("nothing else") is True
+    assert is_conversational_closure("i'm good") is True
+    assert is_conversational_closure("thanks") is True
+    assert is_conversational_closure("thank you") is True
+    assert is_conversational_closure("goodbye") is True
+    assert is_conversational_closure("bye") is True
+    assert is_conversational_closure("browse google for latest news") is False
+    assert is_conversational_closure("search for watches") is False
+
+    # Inquiries
+    assert is_conversational_inquiry("hello") is True
+    assert is_conversational_inquiry("what can you do") is True
+    assert is_conversational_inquiry("who are you") is True
+    assert is_conversational_inquiry("describe your work") is True
+    assert is_conversational_inquiry("search ebay for shoes") is False
+
+
+def test_chat_endpoint_stop_and_closure():
+    from fastapi.testclient import TestClient
+    from main import app
+
+    client = TestClient(app)
+
+    # 1. Test conversational closure
+    res_closure = client.post("/api/chat", json={"message": "no thank you"})
+    assert res_closure.status_code == 200
+    data_c = res_closure.json()
+    assert data_c["type"] == "chat_reply"
+    assert data_c["action"] == "closure"
+    assert "welcome" in data_c["reply"].lower() or "problem" in data_c["reply"].lower()
+
+    # 2. Test stop intent
+    res_stop = client.post("/api/chat", json={"message": "stop"})
+    assert res_stop.status_code == 200
+    data_s = res_stop.json()
+    assert data_s["type"] == "chat_reply"
+    assert data_s["action"] == "stopped"
+

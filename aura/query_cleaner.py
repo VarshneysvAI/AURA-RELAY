@@ -249,3 +249,91 @@ def clean_search_query(text: str) -> Dict[str, Any]:
         "anakin_query": anakin_query,
     }
 
+
+def is_stop_intent(text: str) -> bool:
+    """
+    Returns True if the user is explicitly requesting to stop, cancel, abort, or halt.
+    Prevents running search engine or browser tasks for commands like 'stop', 'please stop', 'cancel'.
+    """
+    if not text:
+        return False
+    t = text.strip().lower()
+    t_clean = re.sub(r"[.!?,;:]+$", "", t).strip()
+
+    exact_stops = {
+        "stop", "stop it", "stop that", "stop now", "please stop", "stop please",
+        "stop browsing", "stop searching", "stop working", "stop everything", "stop agent",
+        "cancel", "cancel it", "cancel that", "cancel task", "please cancel", "cancel please",
+        "halt", "abort", "quit", "pause", "nevermind", "never mind", "shut down",
+        "don't do that", "dont do that", "do not do that", "hold on", "wait stop"
+    }
+    if t_clean in exact_stops:
+        return True
+
+    stop_pattern = r"^(?:can\s+you\s+)?(?:please\s+)?(?:stop|cancel|abort|halt|quit)\b(?:\s+(?:it|that|now|the\s+task|browsing|searching|running|doing\s+that))?$"
+    return bool(re.match(stop_pattern, t_clean))
+
+
+def is_conversational_closure(text: str) -> bool:
+    """
+    Returns True if the user is offering a polite conversational closing, courtesy, or dismissal
+    (e.g., 'no thank you', 'no thanks', 'nothing else', 'that's all', 'i'm good', 'thanks', 'bye').
+    Prevents searching Google / Anakin for phrases like 'no thank you'.
+    """
+    if not text:
+        return False
+    t = text.strip().lower()
+    t_clean = re.sub(r"[.!?,;:]+$", "", t).strip()
+
+    exact_closures = {
+        "no", "no thank you", "no thanks", "no, thank you", "no, thanks", "no thank u", "no thanks!",
+        "nope", "nah", "nothing", "nothing else", "nothing more", "nothing for now",
+        "no need", "no more", "no that's all", "no that is all", "no that's it",
+        "that's all", "that is all", "that's it", "that is it", "that will be all", "that'll be all",
+        "i'm good", "im good", "i am good", "no i'm good", "no im good", "all good", "we are good", "we're good",
+        "i'm done", "im done", "i am done", "we're done", "we are done",
+        "thank you", "thanks", "thanks a lot", "thank you very much", "thanks so much", "thank u", "many thanks",
+        "bye", "goodbye", "good bye", "see you", "see ya", "have a good one", "have a nice day",
+        "great job", "awesome thanks", "perfect thank you", "ok thanks", "okay thanks",
+        "done", "finished", "it's fine", "its fine", "no problem"
+    }
+    if t_clean in exact_closures:
+        return True
+
+    # If sentence contains action verbs like "search", "buy", "find", "open", "browse", "look", "show", it's NOT a closure
+    action_keywords = ["search", "buy", "find", "open", "browse", "look", "show", "get", "ebay", "amazon", "google", "wiki", "youtube", "order"]
+    if any(k in t_clean for k in action_keywords):
+        return False
+
+    closure_pattern = (
+        r"^(?:no\s+)?(?:thank\s+you(?:\s+so\s+much|\s+very\s+much)?|thanks(?:\s+a\s+lot)?|"
+        r"i'?m\s+good|all\s+good|nothing(?:\s+(?:else|more|for\s+now))?|"
+        r"that(?:'?s|\s+is|\s+will\s+be)\s+(?:all|it|enough)|"
+        r"goodbye|bye|nope|nah|done|that\s+is\s+fine|that'?s\s+fine)$"
+    )
+    return bool(re.match(closure_pattern, t_clean))
+
+
+def is_conversational_inquiry(text: str) -> bool:
+    """
+    Returns True if the message is a conversational greeting or inquiry about capabilities.
+    """
+    if not text:
+        return False
+    t = text.strip().lower()
+    t_clean = re.sub(r"[.!?,;:]+$", "", t).strip()
+
+    greetings = {"hello", "hi", "hey", "good morning", "good afternoon", "good evening", "howdy", "sup"}
+    if t_clean in greetings:
+        return True
+
+    return any(
+        phrase in t_clean
+        for phrase in [
+            "listen", "hear me", "can you hear", "can you listen",
+            "describe your work", "how do you work", "what can you do", "who are you",
+            "what is aura", "help me understand"
+        ]
+    )
+
+
