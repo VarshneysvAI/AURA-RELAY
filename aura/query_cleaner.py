@@ -12,6 +12,10 @@ from typing import Dict, Any, Optional
 def build_search_url(platform: str, query: str, max_price: Optional[int] = None) -> str:
     """Constructs a clean, platform-specific search URL using optimized search keywords."""
     clean_q = (query or "").strip()
+    # Strip site name and price filter phrases from the keyword itself so eBay finds products
+    clean_q = re.sub(r"(?i)\b(ebay|amazon|google|wikipedia|youtube)\b", " ", clean_q)
+    clean_q = re.sub(r"(?i)\b(under|below|less than|max)\s+\$?\d+\b", " ", clean_q)
+    clean_q = re.sub(r"\s+", " ", clean_q).strip() or "trending items"
     encoded = urllib.parse.quote(clean_q)
     plat = (platform or "google").lower()
 

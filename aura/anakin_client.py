@@ -141,7 +141,7 @@ class AnakinClient:
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 start_resp = await client.post(start_url, headers=self._get_headers(), json=payload)
-                if start_resp.status_code not in (200, 201):
+                if start_resp.status_code not in (200, 201, 202):
                     logger.error(f"Failed to start scrape: {start_resp.text[:200]}")
                     return {"error": f"Start scrape failed: {start_resp.status_code}"}
 
