@@ -632,7 +632,11 @@ class AgentExecutor:
     async def _execute_secure_portal_flow(self, instruction: str):
         """Executes the specific sandbox flow with self-healing logic."""
         self.state.set_current_step("Opening Portal", "Navigating to login page")
-        target_url = self.config.target_url or f"{self.config.base_url}/sandbox/login.html"
+        url_match = re.search(r"https?://[^\s'\"]+", instruction)
+        if url_match:
+            target_url = url_match.group(0).rstrip(".,;)\"'")
+        else:
+            target_url = self._gathered_info.get("target_url") or self.config.target_url or f"{self.config.base_url}/sandbox/login.html"
         await self.browser.navigate(target_url)
         self.state.add_event("page_opened", f"Navigated to {target_url}")
         await self._capture_and_record_screenshot("01_login_page.png", "Login Page")
@@ -664,7 +668,8 @@ class AgentExecutor:
             self.state.set_current_step("Retrieving OTP", "Checking email inbox")
             self.state.add_event("email_check_started", "Polling for OTP email")
             
-            since_ts = datetime.now(timezone.utc).isoformat()
+            from datetime import timedelta
+            cutoff_time = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
             email_data = None
             start_wait = time.time()
             while time.time() - start_wait < 30 and not self._stop_requested:
@@ -681,13 +686,17 @@ class AgentExecutor:
                     inbox = await asyncio.to_thread(self.email_provider.get_inbox)
                 else:
                     inbox = self.email_provider.get_inbox()
-                for em in inbox:
-                    if not since_ts or em.timestamp >= since_ts:
+                for em in reversed(inbox):
+                    if not getattr(em, 'timestamp', None) or em.timestamp >= cutoff_time:
                         email_data = em
                         break
                 if email_data:
                     break
-                await asyncio.sleep(3.0) # Prevent spamming IMAP server
+                # Fallback for local sandbox inbox: take the newest email
+                if inbox and not hasattr(self.email_provider, '_mail'):
+                    email_data = inbox[-1]
+                    break
+                await asyncio.sleep(1.0)
                 
             if self._stop_requested:
                 return

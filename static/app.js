@@ -1576,23 +1576,6 @@ function formatMessageText(text) {
 }
 
 // =============================================================================
-// Modals & Controls Management
-// =============================================================================
-
-function openSettingsModal() {
-    const modal = document.getElementById('settingsModal');
-    if (modal) {
-        modal.classList.remove('hidden');
-        loadSettingsStatus();
-    }
-}
-
-function closeSettingsModal() {
-    const modal = document.getElementById('settingsModal');
-    if (modal) modal.classList.add('hidden');
-}
-
-// =============================================================================
 // Theme Management
 // =============================================================================
 

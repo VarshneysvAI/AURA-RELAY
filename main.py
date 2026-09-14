@@ -2,6 +2,7 @@
 AURA Relay - Main FastAPI Application
 """
 import os
+import re
 import json
 import logging
 import collections
@@ -422,7 +423,11 @@ async def chat_endpoint(req: ChatRequest):
     # Pre-flight search with Anakin.io web intelligence (1 API call)
     web_intel = None
     direct_url = None
-    if platform != "portal":
+    url_in_msg = re.search(r"https?://[^\s'\"]+", user_msg)
+    if url_in_msg:
+        direct_url = url_in_msg.group(0).rstrip(".,;)\"'")
+
+    if platform != "portal" and not (direct_url and ("127.0.0.1" in direct_url or "localhost" in direct_url or "sandbox" in direct_url)):
         s_res = await anakin.search(clean_query, limit=3)
         if s_res and "results" in s_res and s_res["results"]:
             results = s_res["results"]
@@ -481,6 +486,8 @@ async def chat_endpoint(req: ChatRequest):
     # Determine destination URL
     if direct_url and platform not in ["ebay", "amazon", "wikipedia", "youtube"]:
         target_url = direct_url
+    elif plan.get("target_url") and plan.get("task_type") == "portal_login":
+        target_url = plan["target_url"]
     else:
         target_url = build_search_url(platform, clean_query, clean_info.get("max_price"))
 

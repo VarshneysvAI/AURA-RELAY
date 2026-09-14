@@ -412,6 +412,22 @@ class NvidiaLLMProvider:
                 "steps": ["Respond to coworker"],
             }
 
+        # Sandbox Portal Fast-Path (Pre-configured credentials in sandbox demo)
+        url_match = re.search(r"https?://[^\s'\"]+", user_goal)
+        is_sandbox = "sandbox" in user_lower or "127.0.0.1" in user_lower or "localhost" in user_lower
+        if is_sandbox and any(w in user_lower for w in ["portal", "login", "auth", "sign in", "secure", "tax", "statement", "otp"]):
+            target = url_match.group(0).rstrip(".,;)\"'") if url_match else "http://127.0.0.1:8000/sandbox/login.html"
+            return {
+                "task_type": "portal_login",
+                "summary": "Log into secure sandbox portal and verify with OTP",
+                "optimized_search_query": "",
+                "target_url": target,
+                "needs_upfront_info": False,
+                "questions": [],
+                "coworker_message": "Navigating to your secure portal, filling your credentials, and automatically retrieving and verifying your OTP code from your email.",
+                "steps": ["Navigate to portal", "Enter credentials", "Wait for OTP email", "Verify OTP", "Access Dashboard"],
+            }
+
         # Heuristic plan generator for fallback or unconfigured mode
         def get_heuristic_plan() -> Dict[str, Any]:
             is_portal = any(w in user_lower for w in ["login", "portal", "bank", "account", "tax", "otp", "statement"])

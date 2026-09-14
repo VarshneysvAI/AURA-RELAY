@@ -48,8 +48,22 @@ def clean_search_query(text: str) -> Dict[str, Any]:
     text_clean = text.strip()
     text_lower = text_clean.lower()
 
-    # 1. Platform Detection
-    if "amazon" in text_lower:
+    # 1. Explicit URL & Platform Detection
+    url_match = re.search(r"https?://[^\s'\"]+", text_clean)
+    explicit_url = url_match.group(0).rstrip(".,;)\"'") if url_match else None
+
+    if explicit_url and ("sandbox" in explicit_url or "127.0.0.1" in explicit_url or "localhost" in explicit_url):
+        return {
+            "platform": "portal",
+            "keywords": "secure portal",
+            "max_price": None,
+            "target_url": explicit_url,
+            "anakin_query": "secure portal",
+        }
+
+    if "sandbox" in text_lower or "portal" in text_lower or "login" in text_lower and not any(w in text_lower for w in ["ebay", "amazon", "shop", "buy"]):
+        platform = "portal"
+    elif "amazon" in text_lower:
         platform = "amazon"
     elif "wikipedia" in text_lower or "wiki" in text_lower:
         platform = "wikipedia"
